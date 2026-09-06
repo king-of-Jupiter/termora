@@ -10,14 +10,7 @@ import com.formdev.flatlaf.extras.components.FlatButton
 import com.formdev.flatlaf.util.UIScale
 import org.apache.commons.lang3.StringUtils
 import org.jdesktop.swingx.action.ActionManager
-import java.awt.BorderLayout
-import java.awt.CardLayout
-import java.awt.Component
-import java.awt.Dimension
-import java.awt.Font
-import java.awt.Insets
-import java.awt.KeyboardFocusManager
-import java.awt.Toolkit
+import java.awt.*
 import java.awt.event.*
 import javax.swing.*
 import javax.swing.event.DocumentEvent
@@ -68,10 +61,10 @@ class WelcomePanel(
         centerPanel.isOpaque = false
         val heading = JPanel(BorderLayout(UIScale.scale(16), 0)).apply {
             isOpaque = false
-            border = BorderFactory.createEmptyBorder(0, UIScale.scale(2), UIScale.scale(14), 0)
+            border = BorderFactory.createEmptyBorder(0, UIScale.scale(2), UIScale.scale(18), 0)
         }
         val title = JLabel(I18n.getString("termora.welcome.hosts")).apply {
-            font = font.deriveFont(Font.BOLD, UIScale.scale(22f))
+            font = font.deriveFont(Font.BOLD, UIScale.scale(26f))
             foreground = HostViewStyle.foreground
         }
         val titleRow = JPanel(BorderLayout(UIScale.scale(16), 0)).apply {
@@ -84,7 +77,7 @@ class WelcomePanel(
             isOpaque = false
             add(heading, BorderLayout.NORTH)
             add(createSearchPanel(), BorderLayout.CENTER)
-            border = BorderFactory.createEmptyBorder(0, 0, UIScale.scale(20), 0)
+            border = BorderFactory.createEmptyBorder(0, 0, UIScale.scale(24), 0)
         }
         rootPanel.add(top, BorderLayout.NORTH)
         rootPanel.add(createHostPanel(), BorderLayout.CENTER)
@@ -95,14 +88,14 @@ class WelcomePanel(
 
     private fun createSearchPanel(): JComponent {
         searchTextField.font = searchTextField.font.deriveFont(UIScale.scale(14f))
-        searchTextField.preferredSize = UIScale.scale(Dimension(300, 34))
-        searchTextField.minimumSize = UIScale.scale(Dimension(120, 34))
+        searchTextField.preferredSize = UIScale.scale(Dimension(340, 38))
+        searchTextField.minimumSize = UIScale.scale(Dimension(140, 38))
         searchTextField.placeholderText = I18n.getString("termora.welcome.search-placeholder")
         searchTextField.accessibleContext.accessibleName = searchTextField.placeholderText
         searchTextField.putClientProperty(FlatClientProperties.TEXT_FIELD_LEADING_ICON, Icons.find)
         searchTextField.putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true)
         searchTextField.putClientProperty(FlatClientProperties.STYLE, mapOf(
-            "arc" to 10,
+            "arc" to AppUi.radius,
             "margin" to Insets(0, 12, 0, 12),
             "background" to HostViewStyle.surface,
             "foreground" to HostViewStyle.foreground,
@@ -125,16 +118,16 @@ class WelcomePanel(
             icon = Icons.add
             iconTextGap = UIScale.scale(6)
             font = font.deriveFont(Font.BOLD, UIScale.scale(12f))
-            preferredSize = UIScale.scale(Dimension(132, 32))
+            preferredSize = UIScale.scale(Dimension(136, 36))
             minimumSize = preferredSize
             maximumSize = preferredSize
             alignmentY = Component.CENTER_ALIGNMENT
             putClientProperty(FlatClientProperties.STYLE, mapOf(
-                "arc" to 8,
-                "background" to HostViewStyle.accentSurface,
-                "hoverBackground" to HostViewStyle.accentSurfaceHover,
-                "pressedBackground" to HostViewStyle.accentSurfaceHover,
-                "foreground" to HostViewStyle.accent,
+                "arc" to AppUi.radius,
+                "background" to AppUi.accent,
+                "hoverBackground" to AppUi.accentHover,
+                "pressedBackground" to AppUi.accentHover,
+                "foreground" to Color.WHITE,
                 "borderWidth" to 0,
                 "focusedBorderColor" to HostViewStyle.accent,
             ))
@@ -150,7 +143,7 @@ class WelcomePanel(
                 isOpaque = true
                 background = HostViewStyle.background
                 border = BorderFactory.createEmptyBorder(UIScale.scale(2), UIScale.scale(2), UIScale.scale(2), UIScale.scale(2))
-                preferredSize = UIScale.scale(Dimension(166, 32))
+                preferredSize = UIScale.scale(Dimension(166, 36))
                 minimumSize = preferredSize
                 maximumSize = preferredSize
                 alignmentY = Component.CENTER_ALIGNMENT
@@ -161,8 +154,8 @@ class WelcomePanel(
                     font = font.deriveFont(UIScale.scale(12f))
                     margin = UIScale.scale(Insets(0, 8, 0, 8))
                     putClientProperty(FlatClientProperties.STYLE, mapOf(
-                        "arc" to 7,
-                        "background" to HostViewStyle.background,
+                        "arc" to AppUi.radius - 2,
+                        "background" to AppUi.surfaceSoft,
                         "foreground" to HostViewStyle.secondary,
                         "hoverBackground" to HostViewStyle.hover,
                         "pressedBackground" to HostViewStyle.hover,
@@ -189,12 +182,12 @@ class WelcomePanel(
             icon = Icons.moreHorizontal
             toolTipText = I18n.getString("termora.welcome.workspace-actions")
             accessibleContext.accessibleName = toolTipText
-            preferredSize = UIScale.scale(Dimension(30, 32))
+            preferredSize = UIScale.scale(Dimension(36, 36))
             minimumSize = preferredSize
             maximumSize = preferredSize
             alignmentY = Component.CENTER_ALIGNMENT
             putClientProperty(FlatClientProperties.STYLE, mapOf(
-                "arc" to 8,
+                "arc" to AppUi.radius,
                 "background" to HostViewStyle.surface,
                 "hoverBackground" to HostViewStyle.hover,
                 "pressedBackground" to HostViewStyle.hover,
@@ -208,7 +201,7 @@ class WelcomePanel(
         toolbar.background = HostViewStyle.surface
         toolbar.border = BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(HostViewStyle.border, UIScale.scale(1), true),
-            BorderFactory.createEmptyBorder(UIScale.scale(5), UIScale.scale(6), UIScale.scale(5), UIScale.scale(6)),
+            BorderFactory.createEmptyBorder(UIScale.scale(6), UIScale.scale(7), UIScale.scale(6), UIScale.scale(7)),
         )
         toolbar.add(searchTextField, BorderLayout.CENTER)
         toolbar.add(toolbarActions, BorderLayout.EAST)
@@ -360,9 +353,9 @@ class WelcomePanel(
     }
 
     private fun perform() {
-        val side = if (fullContent) UIScale.scale(20)
-        else max(UIScale.scale(24), (width - UIScale.scale(1360)) / 2)
-        rootPanel.border = BorderFactory.createEmptyBorder(UIScale.scale(24), side, UIScale.scale(24), side)
+        val side = if (fullContent) UIScale.scale(24)
+        else max(UIScale.scale(28), (width - UIScale.scale(1280)) / 2)
+        rootPanel.border = BorderFactory.createEmptyBorder(UIScale.scale(30), side, UIScale.scale(28), side)
         if (width > 0) {
             val stack = width - side * 2 < UIScale.scale(700)
             if (stack != stackedToolbar) {

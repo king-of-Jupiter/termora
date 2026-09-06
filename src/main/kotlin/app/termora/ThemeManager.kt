@@ -118,6 +118,7 @@ internal class ThemeManager private constructor() {
     private fun immediateChange(classname: String) {
         try {
             UIManager.setLookAndFeel(classname)
+            AppUi.install()
         } catch (ex: Exception) {
             log.error(ex.message, ex)
         }

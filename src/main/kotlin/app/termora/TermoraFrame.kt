@@ -186,9 +186,9 @@ class TermoraFrame : JFrame(), DataProvider {
             tabbedPane.tabAreaInsets = Insets(0, 76, 0, 0)
         } else if (SystemInfo.isWindows) {
             // Windows 10 会有1像素误差
-            tabbedPane.tabAreaInsets = Insets(if (SystemInfo.isWindows_11_orLater) 1 else 2, 2, 0, 0)
+            tabbedPane.tabAreaInsets = Insets(if (SystemInfo.isWindows_11_orLater) 2 else 3, 6, 2, 0)
         } else if (SystemInfo.isLinux) {
-            tabbedPane.tabAreaInsets = Insets(1, 2, 0, 0)
+            tabbedPane.tabAreaInsets = Insets(2, 6, 2, 0)
         }
 
         tabbedPane.trailingComponent = toolbar

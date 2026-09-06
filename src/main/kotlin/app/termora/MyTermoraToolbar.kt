@@ -6,8 +6,8 @@ import com.formdev.flatlaf.FlatClientProperties
 import com.formdev.flatlaf.extras.components.FlatPopupMenu
 import com.formdev.flatlaf.extras.components.FlatToolBar
 import com.formdev.flatlaf.util.SystemInfo
-import java.awt.AWTEvent
-import java.awt.Rectangle
+import com.formdev.flatlaf.util.UIScale
+import java.awt.*
 import java.awt.event.*
 import java.beans.PropertyChangeEvent
 import java.beans.PropertyChangeListener
@@ -34,6 +34,11 @@ internal class MyTermoraToolbar(private val windowScope: WindowScope, private va
 
     private fun initView() {
         isFloatable = false
+        isOpaque = true
+        background = AppUi.surfaceSoft
+        border = BorderFactory.createEmptyBorder(
+            UIScale.scale(4), UIScale.scale(5), UIScale.scale(4), UIScale.scale(6)
+        )
     }
 
     private fun initEvents() {
@@ -79,18 +84,26 @@ internal class MyTermoraToolbar(private val windowScope: WindowScope, private va
             override fun actionPerformed(evt: ActionEvent) {
                 actionManager.getAction(FindEverywhereAction.FIND_EVERYWHERE)?.actionPerformed(evt)
             }
-        }))
+        }).also {
+            it.toolTipText = I18n.getString("termora.find-everywhere")
+            styleToolbarButton(it, accent = true)
+        })
 
         if (SystemInfo.isLinux || SystemInfo.isWindows) {
-            add(Box.createHorizontalStrut(24))
+            add(Box.createHorizontalStrut(UIScale.scale(8)))
         }
 
         add(Box.createHorizontalGlue())
 
+        var visibleActionCount = 0
         for (action in model.getActions()) {
             if (action.visible.not()) continue
             val action = actionManager.getAction(action.id) ?: continue
+            if (visibleActionCount > 0) {
+                add(Box.createHorizontalStrut(UIScale.scale(2)))
+            }
             add(redirectAction(action, disposable))
+            visibleActionCount++
         }
 
         if (SystemInfo.isWindows || SystemInfo.isLinux) {
@@ -127,6 +140,7 @@ internal class MyTermoraToolbar(private val windowScope: WindowScope, private va
         button.toolTipText = (action.getValue(Action.SHORT_DESCRIPTION) as? String)
             ?: action.getValue(Action.NAME) as? String
         button.icon = action.getValue(Action.SMALL_ICON) as? Icon
+        styleToolbarButton(button)
         button.addActionListener(object : AbstractAction() {
             override fun actionPerformed(e: ActionEvent) {
                 action.actionPerformed(e)
@@ -153,6 +167,31 @@ internal class MyTermoraToolbar(private val windowScope: WindowScope, private va
         Disposer.register(disposable, listener)
 
         return button
+    }
+
+    private fun styleToolbarButton(button: AbstractButton, accent: Boolean = false) {
+        val size = UIScale.scale(Dimension(30, 30))
+        button.preferredSize = size
+        button.minimumSize = size
+        button.maximumSize = size
+        button.margin = Insets(0, 0, 0, 0)
+        button.isOpaque = false
+        button.putClientProperty(
+            FlatClientProperties.STYLE,
+            mapOf(
+                "arc" to AppUi.radius - 2,
+                "background" to if (accent) AppUi.accentSurface else AppUi.surfaceSoft,
+                "hoverBackground" to if (accent) AppUi.accentSurfaceHover else AppUi.hover,
+                "pressedBackground" to if (accent) AppUi.accentSurfaceHover else AppUi.pressed,
+                "selectedBackground" to AppUi.accentSurface,
+                "selectedForeground" to AppUi.accent,
+                "foreground" to AppUi.foreground,
+                "borderWidth" to 0,
+                "focusWidth" to 0,
+                "innerFocusWidth" to 0,
+                "margin" to Insets(0, 0, 0, 0),
+            )
+        )
     }
 
     /**

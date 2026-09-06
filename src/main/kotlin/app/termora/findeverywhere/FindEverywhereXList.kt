@@ -1,9 +1,10 @@
 package app.termora.findeverywhere
 
+import app.termora.AppUi
+import app.termora.Icons
 import com.formdev.flatlaf.ui.FlatListUI
 import org.jdesktop.swingx.JXList
 import java.awt.*
-import java.awt.Color
 import java.awt.event.MouseEvent
 import javax.swing.*
 
@@ -42,27 +43,16 @@ class FindEverywhereXList(private val model: DefaultListModel<FindEverywhereResu
             )
         )
 
-        // Draw search icon
-        val iconSize = 32
-        val iconX = width / 2 - iconSize / 2
-        val iconY = (height * 0.2).toInt() - iconSize / 2
-        val accent = UIManager.getColor("Component.accentColor")
-            ?: UIManager.getColor("List.selectionBackground")
-            ?: UIManager.getColor("textInactiveText")
-        g.color = Color(accent.red, accent.green, accent.blue, 80)
-        g.fillOval(iconX, iconY, iconSize, iconSize)
-        g.color = Color(accent.red, accent.green, accent.blue, 160)
-        g.font = g.font.deriveFont(18f)
-        val iconText = "?"
-        val iconTextW = g.fontMetrics.stringWidth(iconText)
-        g.drawString(iconText, width / 2 - iconTextW / 2, iconY + iconSize / 2 + 6)
+        // Keep the empty state aligned with the application's native icon system.
+        val icon = Icons.find
+        val iconY = (height * 0.22).toInt() - icon.iconHeight / 2
+        icon.paintIcon(this, g, width / 2 - icon.iconWidth / 2, iconY)
 
-        // Draw text below
-        g.color = UIManager.getColor("textInactiveText")
-        g.font = g.font.deriveFont(g.font.size - 1f)
+        g.color = AppUi.secondary
+        g.font = font.deriveFont(font.size2D)
         val text = app.termora.I18n.getString("termora.find-everywhere.nothing-found")
         val w = g.fontMetrics.stringWidth(text)
-        g.drawString(text, width / 2 - w / 2, iconY + iconSize + 20)
+        g.drawString(text, width / 2 - w / 2, iconY + icon.iconHeight + 24)
     }
 
     private fun isGroup(e: Point): Boolean {
@@ -108,11 +98,13 @@ class FindEverywhereXList(private val model: DefaultListModel<FindEverywhereResu
 
                 if (value is GroupFindEverywhereResult) {
                     val label = JLabel(value.toString())
-                    label.foreground = UIManager.getColor("textInactiveText")
-                    label.font = font.deriveFont(font.size - 2f)
-                    val box = Box.createHorizontalBox()
-                    box.add(label)
-                    return box
+                    label.foreground = AppUi.secondary
+                    label.font = font.deriveFont(Font.BOLD, font.size2D - 2f)
+                    val panel = JPanel(BorderLayout())
+                    panel.background = AppUi.surface
+                    panel.border = BorderFactory.createEmptyBorder(8, 10, 2, 10)
+                    panel.add(label, BorderLayout.CENTER)
+                    return panel
                 }
 
                 val c = super.getListCellRendererComponent(
@@ -122,9 +114,14 @@ class FindEverywhereXList(private val model: DefaultListModel<FindEverywhereResu
                     isSelected,
                     cellHasFocus
                 )
+                border = BorderFactory.createEmptyBorder(6, 10, 6, 10)
+                iconTextGap = 10
                 if (isSelected) {
-                    background = UIManager.getColor("List.selectionBackground")
-                    foreground = UIManager.getColor("List.selectionForeground")
+                    background = AppUi.accentSurface
+                    foreground = AppUi.foreground
+                } else {
+                    background = AppUi.surface
+                    foreground = AppUi.foreground
                 }
                 if (value is FindEverywhereResult) {
                     icon = value.getIcon(isSelected)

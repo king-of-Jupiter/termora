@@ -6,8 +6,8 @@ import app.termora.actions.AnAction
 import app.termora.actions.AnActionEvent
 import app.termora.database.OwnerType
 import app.termora.protocol.*
+import com.formdev.flatlaf.FlatClientProperties
 import com.formdev.flatlaf.extras.components.FlatToolBar
-import com.formdev.flatlaf.ui.FlatButtonBorder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
@@ -19,6 +19,7 @@ import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Dimension
 import java.awt.Graphics
+import java.awt.Insets
 import java.awt.Window
 import javax.swing.*
 
@@ -43,13 +44,14 @@ class NewHostDialogV2(
 
     init {
 
-        size = Dimension(UIManager.getInt("Dialog.width"), UIManager.getInt("Dialog.height"))
+        size = Dimension(maxOf(UIManager.getInt("Dialog.width"), 820), maxOf(UIManager.getInt("Dialog.height"), 640))
         isModal = true
         title = I18n.getString("termora.new-host.title")
 
         setLocationRelativeTo(owner)
 
         init()
+        styleFormControls()
     }
 
 
@@ -62,11 +64,15 @@ class NewHostDialogV2(
     override fun createCenterPanel(): JComponent {
         val toolbar = FlatToolBar()
         val panel = JPanel(BorderLayout())
+        panel.background = AppUi.background
+        cardPanel.background = AppUi.background
+        cardPanel.border = BorderFactory.createEmptyBorder(10, 0, 0, 0)
 
         toolbar.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(1, 0, 1, 0, DynamicColor.BorderColor),
-            BorderFactory.createEmptyBorder(4, 0, 4, 0)
+            BorderFactory.createMatteBorder(0, 0, 1, 0, AppUi.border),
+            BorderFactory.createEmptyBorder(10, 18, 10, 18)
         )
+        toolbar.background = AppUi.surface
         panel.add(toolbar, BorderLayout.NORTH)
         panel.add(cardPanel, BorderLayout.CENTER)
 
@@ -76,15 +82,14 @@ class NewHostDialogV2(
             .filter { it.canCreateProtocolHostPanel(accountOwner) }
         for ((index, extension) in extensions.withIndex()) {
             val protocol = extension.getProtocolProvider().getProtocol()
-            val icon = ScaleIcon(extension.getProtocolProvider().getIcon(), 22)
+            val icon = ScaleIcon(extension.getProtocolProvider().getIcon(), 18)
             val hostPanel = extension.createProtocolHostPanel(accountOwner)
             val button = JToggleButton(protocol, icon).apply { buttonGroup.add(this) }
-            button.setVerticalTextPosition(SwingConstants.BOTTOM)
-            button.setHorizontalTextPosition(SwingConstants.CENTER)
-            button.border = BorderFactory.createCompoundBorder(
-                FlatButtonBorder(),
-                BorderFactory.createEmptyBorder(0, 4, 0, 4)
-            )
+            button.setVerticalTextPosition(SwingConstants.CENTER)
+            button.setHorizontalTextPosition(SwingConstants.RIGHT)
+            button.iconTextGap = 7
+            button.isFocusPainted = false
+            button.margin = Insets(8, 12, 8, 12)
             button.addActionListener { show(protocol, hostPanel, extension, button) }
 
             Disposer.register(disposable, hostPanel)
@@ -94,7 +99,7 @@ class NewHostDialogV2(
             toolbar.add(button)
 
             if (extension != extensions.last()) {
-                toolbar.add(Box.createHorizontalStrut(6))
+                toolbar.add(Box.createHorizontalStrut(8))
             }
 
             if (editHost == null) {
@@ -124,6 +129,17 @@ class NewHostDialogV2(
         toolbar.add(Box.createHorizontalGlue())
 
         return panel
+    }
+
+    private fun styleFormControls() {
+        for (component in SwingUtils.getDescendantsOfType(JComponent::class.java, cardPanel)) {
+            when (component) {
+                is JTextField, is JComboBox<*>, is JSpinner -> {
+                    val preferred = component.preferredSize
+                    component.preferredSize = Dimension(preferred.width, maxOf(preferred.height, 36))
+                }
+            }
+        }
     }
 
     private fun show(

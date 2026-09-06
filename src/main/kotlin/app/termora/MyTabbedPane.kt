@@ -8,6 +8,7 @@ import app.termora.keymap.KeyShortcut
 import app.termora.keymap.KeymapManager
 import com.formdev.flatlaf.extras.components.FlatTabbedPane
 import com.formdev.flatlaf.ui.FlatTabbedPaneUI
+import com.formdev.flatlaf.util.UIScale
 import org.apache.commons.lang3.StringUtils
 import java.awt.*
 import java.awt.event.*
@@ -52,13 +53,34 @@ internal class MyTabbedPane : FlatTabbedPane(), Disposable {
 
     init {
         isFocusable = false
+        isOpaque = true
+        background = AppUi.surfaceSoft
+        tabType = FlatTabbedPane.TabType.card
+        setShowTabSeparators(false)
+        setShowContentSeparators(true)
+        minimumTabWidth = UIScale.scale(42)
+        maximumTabWidth = UIScale.scale(220)
+        tabInsets = UIScale.scale(Insets(0, 11, 0, 11))
 
         styleMap = mapOf(
-            "focusColor" to DynamicColor("TabbedPane.background"),
-            "hoverColor" to DynamicColor("TabbedPane.background"),
-            "underlineColor" to (UIManager.getColor("Component.accentColor")
-                ?: UIManager.getColor("List.selectionBackground")
-                ?: DynamicColor("TabbedPane.background")),
+            "foreground" to AppUi.secondary,
+            "selectedBackground" to AppUi.surface,
+            "selectedForeground" to AppUi.foreground,
+            "focusColor" to AppUi.hover,
+            "hoverColor" to AppUi.hover,
+            "underlineColor" to AppUi.accent,
+            "inactiveUnderlineColor" to AppUi.border,
+            "tabSeparatorColor" to AppUi.border,
+            "contentAreaColor" to AppUi.border,
+            "tabSelectionHeight" to 2,
+            "tabArc" to AppUi.radius,
+            "cardTabArc" to AppUi.radius,
+            "contentSeparatorHeight" to 1,
+            "showTabSeparators" to false,
+            "tabsOpaque" to true,
+            "buttonArc" to AppUi.radius - 2,
+            "buttonHoverBackground" to AppUi.hover,
+            "buttonPressedBackground" to AppUi.pressed,
         )
 
         initEvents()

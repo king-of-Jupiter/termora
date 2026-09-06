@@ -125,20 +125,30 @@ class HostCardsPanel(
             if (hosts.isNotEmpty() || filterText.isBlank()) addGroup(folder.name, folder.id, folder.ownerId, hosts, row++)
         }
         if (visibleHosts.isEmpty()) {
-            val empty = JPanel(BorderLayout(0, UIScale.scale(10))).apply {
+            val empty = JPanel(GridBagLayout()).apply {
                 isOpaque = false
-                border = BorderFactory.createEmptyBorder(UIScale.scale(64), 0, UIScale.scale(64), 0)
+                border = BorderFactory.createEmptyBorder(UIScale.scale(84), 0, UIScale.scale(84), 0)
             }
             val titleKey = if (filterText.isBlank()) "termora.welcome.no-hosts" else "termora.welcome.no-results"
             val hintKey = if (filterText.isBlank()) "termora.welcome.empty-hint" else "termora.welcome.no-results-hint"
-            empty.add(JLabel(I18n.getString(titleKey), SwingConstants.CENTER).apply {
-                font = font.deriveFont(Font.BOLD, UIScale.scale(18f))
-                foreground = HostViewStyle.foreground
-            }, BorderLayout.CENTER)
-            empty.add(JLabel(I18n.getString(hintKey), SwingConstants.CENTER).apply {
-                font = font.deriveFont(UIScale.scale(13f))
-                foreground = HostViewStyle.secondary
-            }, BorderLayout.SOUTH)
+            val stack = JPanel().apply {
+                isOpaque = false
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                add(EmptyStateIcon())
+                add(Box.createVerticalStrut(UIScale.scale(18)))
+                add(JLabel(I18n.getString(titleKey), SwingConstants.CENTER).apply {
+                    alignmentX = Component.CENTER_ALIGNMENT
+                    font = font.deriveFont(Font.BOLD, UIScale.scale(18f))
+                    foreground = HostViewStyle.foreground
+                })
+                add(Box.createVerticalStrut(UIScale.scale(8)))
+                add(JLabel(I18n.getString(hintKey), SwingConstants.CENTER).apply {
+                    alignmentX = Component.CENTER_ALIGNMENT
+                    font = font.deriveFont(UIScale.scale(13f))
+                    foreground = HostViewStyle.secondary
+                })
+            }
+            empty.add(stack)
             contentPanel.add(empty, rowConstraints(row++))
         }
         contentPanel.add(Box.createGlue(), rowConstraints(row).apply { weighty = 1.0; fill = GridBagConstraints.BOTH })
@@ -453,14 +463,28 @@ class HostCardsPanel(
             isOpaque = false
             isFocusable = true
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            border = BorderFactory.createEmptyBorder(UIScale.scale(12), UIScale.scale(14), UIScale.scale(12), UIScale.scale(10))
+            border = BorderFactory.createEmptyBorder(UIScale.scale(14), UIScale.scale(16), UIScale.scale(14), UIScale.scale(12))
             foreground = HostViewStyle.foreground
             getAccessibleContext().accessibleName = "${host.name}, ${hostCardAddress(host)}"
             toolTipText = listOf(host.name, hostCardAddress(host), host.remark).filter { it.isNotBlank() }.joinToString(" · ")
-            add(JPanel(GridBagLayout()).apply {
-                isOpaque = false
-                preferredSize = UIScale.scale(Dimension(30, 30))
-                add(JLabel(getHostIcon(host)))
+            add(object : JPanel(GridBagLayout()) {
+                init {
+                    isOpaque = false
+                    preferredSize = UIScale.scale(Dimension(34, 34))
+                    add(JLabel(getHostIcon(host)))
+                }
+
+                override fun paintComponent(g: Graphics) {
+                    val g2 = g.create() as Graphics2D
+                    try {
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                        g2.color = HostViewStyle.accentSurface
+                        g2.fillRoundRect(0, 0, width, height, UIScale.scale(10), UIScale.scale(10))
+                    } finally {
+                        g2.dispose()
+                    }
+                    super.paintComponent(g)
+                }
             }, BorderLayout.WEST)
             val details = JPanel(GridBagLayout()).apply { isOpaque = false }
             fun addLine(text: String, row: Int, size: Float, bold: Boolean, color: Color) {
@@ -638,7 +662,7 @@ class HostCardsPanel(
             val g2 = g.create() as Graphics2D
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                val arc = UIScale.scale(12)
+                val arc = UIScale.scale(AppUi.radiusLarge)
                 val base = HostViewStyle.surface
                 val target = HostViewStyle.hover
                 g2.color = Color(
@@ -647,12 +671,10 @@ class HostCardsPanel(
                     (base.blue + (target.blue - base.blue) * hover).toInt(),
                 ).let { if (pressed) it.darker() else it }
                 g2.fillRoundRect(1, 1, width - 2, height - 2, arc, arc)
-                if (hasFocus() || loading || hover > 0.01f) {
-                    g2.color = if (hasFocus() || loading) HostViewStyle.accent else HostViewStyle.border
-                    g2.composite = AlphaComposite.SrcOver.derive(if (hasFocus() || loading) 1f else hover * 0.8f)
-                    g2.stroke = BasicStroke(UIScale.scale(if (hasFocus()) 1.5f else 1f))
-                    g2.drawRoundRect(1, 1, width - 3, height - 3, arc, arc)
-                }
+                g2.color = if (hasFocus() || loading) HostViewStyle.accent else HostViewStyle.border
+                g2.composite = AlphaComposite.SrcOver.derive(if (hasFocus() || loading) 1f else 0.9f)
+                g2.stroke = BasicStroke(UIScale.scale(if (hasFocus()) 1.5f else 1f))
+                g2.drawRoundRect(1, 1, width - 3, height - 3, arc, arc)
                 if (dropEdge != 0) {
                     g2.composite = AlphaComposite.SrcOver
                     g2.color = HostViewStyle.accent
@@ -686,6 +708,32 @@ class HostCardsPanel(
     override fun dispose() {
         removeDragGhost()
         hostCards.forEach { it.stopAnimations() }
+    }
+
+    private class EmptyStateIcon : JComponent() {
+        private val icon = (Icons.terminal as? DynamicIcon)?.derive(28, 28) ?: Icons.terminal
+
+        init {
+            isOpaque = false
+            alignmentX = Component.CENTER_ALIGNMENT
+            preferredSize = UIScale.scale(Dimension(56, 56))
+            minimumSize = preferredSize
+            maximumSize = preferredSize
+        }
+
+        override fun paintComponent(g: Graphics) {
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g2.color = HostViewStyle.accentSurface
+                g2.fillRoundRect(0, 0, width, height, UIScale.scale(16), UIScale.scale(16))
+                val x = (width - icon.iconWidth) / 2
+                val y = (height - icon.iconHeight) / 2
+                icon.paintIcon(this, g2, x, y)
+            } finally {
+                g2.dispose()
+            }
+        }
     }
 }
 

@@ -1,7 +1,8 @@
 package app.termora.findeverywhere
 
 import app.termora.DialogWrapper
-import app.termora.DynamicColor
+import app.termora.AppUi
+import app.termora.Icons
 import app.termora.I18n
 import app.termora.WindowScope
 import app.termora.actions.AnAction
@@ -39,29 +40,32 @@ class FindEverywhere(owner: Window, private val windowScope: WindowScope) : Dial
 
     private fun initView() {
 
-        size = Dimension(UIManager.getInt("Dialog.height"), UIManager.getInt("Dialog.height"))
-        minimumSize = Dimension(size.width / 2, size.height / 2)
+        size = Dimension(640, 520)
+        minimumSize = Dimension(480, 360)
         isModal = false
         lostFocusDispose = true
         setLocationRelativeTo(null)
 
-
-        val desktopBackground = DynamicColor("desktop")
-        centerPanel.background = DynamicColor("desktop")
-        centerPanel.border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
+        centerPanel.background = AppUi.surface
+        centerPanel.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(AppUi.border),
+            BorderFactory.createEmptyBorder(14, 14, 14, 14)
+        )
 
         searchTextField.placeholderText = I18n.getString("termora.find-everywhere.search-for-something")
-        searchTextField.preferredSize = Dimension(-1, UIManager.getInt("TitleBar.height") - 10)
-        searchTextField.padding = Insets(0, 4, 0, 4)
-        searchTextField.border = BorderFactory.createMatteBorder(0, 0, 1, 0, DynamicColor.BorderColor)
+        searchTextField.accessibleContext.accessibleName = searchTextField.placeholderText
+        searchTextField.leadingIcon = Icons.find
+        searchTextField.background = AppUi.surfaceSoft
+        searchTextField.preferredSize = Dimension(-1, 44)
+        searchTextField.padding = Insets(0, 8, 0, 8)
         searchTextField.focusTraversalKeysEnabled = false
 
         resultList.isFocusable = false
-        resultList.fixedCellHeight = UIManager.getInt("Tree.rowHeight")
+        resultList.fixedCellHeight = 40
         resultList.isRolloverEnabled = false
         resultList.selectionMode = ListSelectionModel.SINGLE_SELECTION
-        resultList.border = BorderFactory.createEmptyBorder(5, 0, 0, 0)
-        resultList.background = desktopBackground
+        resultList.border = BorderFactory.createEmptyBorder(10, 0, 0, 0)
+        resultList.background = AppUi.surface
 
 
         val scrollPane = JScrollPane(resultList)
@@ -69,6 +73,8 @@ class FindEverywhere(owner: Window, private val windowScope: WindowScope) : Dial
         scrollPane.verticalScrollBar.preferredSize = Dimension(0, 0)
         scrollPane.verticalScrollBar.minimumSize = Dimension(0, 0)
         scrollPane.border = BorderFactory.createEmptyBorder()
+        scrollPane.background = AppUi.surface
+        scrollPane.viewport.background = AppUi.surface
 
         centerPanel.add(searchTextField, BorderLayout.NORTH)
         centerPanel.add(scrollPane, BorderLayout.CENTER)

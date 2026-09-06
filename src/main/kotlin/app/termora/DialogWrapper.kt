@@ -129,6 +129,8 @@ abstract class DialogWrapper(owner: Window?) : JDialog(owner) {
     protected open fun createSouthPanel(): JComponent? {
         val westSourcePanel = createWestSourcePanel()
         val box = Box.createHorizontalBox()
+        box.background = AppUi.surface
+        box.isOpaque = true
 
         if (westSourcePanel != null) {
             box.add(westSourcePanel)
@@ -137,15 +139,15 @@ abstract class DialogWrapper(owner: Window?) : JDialog(owner) {
         }
 
         box.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(1, 0, 0, 0, DynamicColor.BorderColor),
-            BorderFactory.createEmptyBorder(10, 16, 10, 16)
+            BorderFactory.createMatteBorder(1, 0, 0, 0, AppUi.border),
+            BorderFactory.createEmptyBorder(12, 18, 12, 18)
         )
 
         val actions = createActions()
         for (i in actions.size - 1 downTo 0) {
             box.add(createJButtonForAction(actions[i]))
             if (i != 0) {
-                box.add(Box.createHorizontalStrut(10))
+                box.add(Box.createHorizontalStrut(8))
             }
         }
 
@@ -170,6 +172,8 @@ abstract class DialogWrapper(owner: Window?) : JDialog(owner) {
 
     protected open fun createJButtonForAction(action: Action): JButton {
         val button = JButton(action)
+        val preferred = button.preferredSize
+        button.preferredSize = Dimension(maxOf(preferred.width, 92), maxOf(preferred.height, 34))
         val value = action.getValue(DEFAULT_ACTION)
         if (value is Boolean && value) {
             rootPane.defaultButton = button

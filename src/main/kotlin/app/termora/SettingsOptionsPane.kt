@@ -29,6 +29,13 @@ import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.SystemUtils
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Dimension
+import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
+import java.awt.RenderingHints
 import java.awt.Toolkit
 import java.awt.event.ActionEvent
 import java.awt.event.ItemEvent
@@ -105,6 +112,82 @@ class SettingsOptionsPane : OptionsPane() {
 
     override fun addOption(option: Option) {
         super.addOption(option)
+    }
+
+    override fun decorateOptionComponent(option: Option, component: JComponent): JComponent {
+        styleSettingsComponent(component)
+
+        val title = JLabel(option.getTitle()).apply {
+            foreground = AppUi.foreground
+            font = font.deriveFont(Font.BOLD, font.size2D + 5f)
+            border = BorderFactory.createEmptyBorder(0, 2, 0, 0)
+        }
+
+        val header = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(0, 0, 16, 0)
+            add(title, BorderLayout.WEST)
+        }
+
+        val card = object : JPanel(BorderLayout()) {
+            override fun paintComponent(g: Graphics) {
+                val g2 = g.create() as Graphics2D
+                try {
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    g2.color = AppUi.surface
+                    g2.fillRoundRect(0, 0, width, height, AppUi.radiusLarge, AppUi.radiusLarge)
+                    g2.color = AppUi.border
+                    g2.drawRoundRect(0, 0, width - 1, height - 1, AppUi.radiusLarge, AppUi.radiusLarge)
+                } finally {
+                    g2.dispose()
+                }
+            }
+        }.apply {
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(22, 24, 22, 24)
+            add(component, BorderLayout.CENTER)
+        }
+
+        val content = JPanel(GridBagLayout()).apply {
+            isOpaque = false
+            val gbc = GridBagConstraints().apply {
+                gridx = 0
+                gridy = 0
+                weightx = 1.0
+                weighty = 0.0
+                fill = GridBagConstraints.HORIZONTAL
+                anchor = GridBagConstraints.NORTHWEST
+            }
+            add(card, gbc)
+            gbc.gridy = 1
+            gbc.weighty = 1.0
+            gbc.fill = GridBagConstraints.BOTH
+            add(Box.createGlue(), gbc)
+        }
+
+        return JPanel(BorderLayout()).apply {
+            background = AppUi.background
+            border = BorderFactory.createEmptyBorder(4, 4, 4, 4)
+            add(header, BorderLayout.NORTH)
+            add(content, BorderLayout.CENTER)
+        }
+    }
+
+    private fun styleSettingsComponent(component: JComponent) {
+        if (component is JPanel || component is JToolBar) {
+            component.background = AppUi.surface
+        }
+
+        when (component) {
+            is JTextField, is JComboBox<*>, is JSpinner -> {
+                val preferred = component.preferredSize
+                component.preferredSize = Dimension(preferred.width, maxOf(preferred.height, 36))
+            }
+        }
+
+        for (child in component.components) {
+            if (child is JComponent) styleSettingsComponent(child)
+        }
     }
 
     private inner class AppearanceOption : JPanel(BorderLayout()), Option {

@@ -15,10 +15,10 @@ internal class SettingsDialog(owner: Window) : DialogWrapper(owner) {
     private val properties get() = DatabaseManager.getInstance().properties
 
     init {
-        val w = UIScale.scale(UIManager.getInt("Dialog.width")).coerceAtLeast(860)
-        val h = UIScale.scale(UIManager.getInt("Dialog.height")).coerceAtLeast(580)
+        val w = UIScale.scale(UIManager.getInt("Dialog.width")).coerceAtLeast(940)
+        val h = UIScale.scale(UIManager.getInt("Dialog.height")).coerceAtLeast(640)
         size = Dimension(w, h)
-        minimumSize = Dimension(780, 520)
+        minimumSize = Dimension(840, 560)
         isModal = true
         title = I18n.getString("termora.setting")
         setLocationRelativeTo(null)
@@ -44,13 +44,13 @@ internal class SettingsDialog(owner: Window) : DialogWrapper(owner) {
     }
 
     override fun createCenterPanel(): JComponent {
-        optionsPane.background = UIManager.getColor("window")
+        optionsPane.background = AppUi.background
 
         val panel = JPanel(BorderLayout())
         panel.add(optionsPane, BorderLayout.CENTER)
-        panel.background = UIManager.getColor("window")
+        panel.background = AppUi.background
         panel.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(1, 0, 0, 0, DynamicColor.BorderColor),
+            BorderFactory.createMatteBorder(1, 0, 0, 0, AppUi.border),
             BorderFactory.createEmptyBorder(0, 0, 0, 0)
         )
 

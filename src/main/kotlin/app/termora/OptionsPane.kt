@@ -9,20 +9,16 @@ import javax.swing.border.Border
 
 abstract class OptionsPane : JPanel(BorderLayout()), Disposable {
     companion object {
-        const val FORM_MARGIN = "7dlu"
+        const val FORM_MARGIN = "9dlu"
     }
 
     private val options = mutableListOf<Option>()
     protected val tabListModel = DefaultListModel<Option>()
-    protected val tabList = object : JList<Option>(tabListModel) {
-        override fun getBackground(): Color {
-            return this@OptionsPane.background
-        }
-    }
+    protected val tabList = JList<Option>(tabListModel)
     private val cardLayout = CardLayout()
     private val contentPanel = JPanel(cardLayout)
     private val loadedComponents = mutableMapOf<String, JComponent>()
-    private var contentPanelBorder = BorderFactory.createEmptyBorder(6, 8, 6, 8)
+    private var contentPanelBorder = BorderFactory.createEmptyBorder(18, 22, 16, 22)
     private var themeChanged = false
 
     init {
@@ -32,14 +28,17 @@ abstract class OptionsPane : JPanel(BorderLayout()), Disposable {
 
     private fun initView() {
 
-        tabList.fixedCellHeight = (UIManager.getInt("Tree.rowHeight") * 1.3).toInt()
-        tabList.fixedCellWidth = 180
+        tabList.fixedCellHeight = 40
+        tabList.fixedCellWidth = 176
+        tabList.background = AppUi.surfaceSoft
         tabList.selectionMode = ListSelectionModel.SINGLE_SELECTION
         tabList.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 0, 1, DynamicColor.BorderColor),
-            BorderFactory.createEmptyBorder(6, 6, 0, 6)
+            BorderFactory.createMatteBorder(0, 0, 0, 1, AppUi.border),
+            BorderFactory.createEmptyBorder(10, 8, 10, 8)
         )
         tabList.cellRenderer = object : DefaultListCellRenderer() {
+            private var selected = false
+
             override fun getListCellRendererComponent(
                 list: JList<*>?,
                 value: Any?,
@@ -49,6 +48,7 @@ abstract class OptionsPane : JPanel(BorderLayout()), Disposable {
             ): Component {
                 val option = value as Option
                 val c = super.getListCellRendererComponent(list, option.getTitle(), index, isSelected, cellHasFocus)
+                selected = isSelected
 
                 icon = option.getIcon(isSelected)
                 if (isSelected && tabList.hasFocus()) {
@@ -59,25 +59,30 @@ abstract class OptionsPane : JPanel(BorderLayout()), Disposable {
                     }
                 }
 
-                // Apple-style sidebar item: rounded, with accent selection
+                isOpaque = false
+                iconTextGap = 9
                 if (isSelected) {
-                    val accent = UIManager.getColor("Component.accentColor")
-                        ?: UIManager.getColor("List.selectionBackground")
-                        ?: background
-                    background = Color(accent.red, accent.green, accent.blue, if (FlatLaf.isLafDark()) 40 else 25)
-                    foreground = accent
-                    border = BorderFactory.createCompoundBorder(
-                        BorderFactory.createEmptyBorder(2, 2, 2, 2),
-                        BorderFactory.createEmptyBorder(4, 10, 4, 10)
-                    )
+                    foreground = AppUi.accent
                 } else {
-                    border = BorderFactory.createCompoundBorder(
-                        BorderFactory.createEmptyBorder(2, 2, 2, 2),
-                        BorderFactory.createEmptyBorder(4, 10, 4, 10)
-                    )
+                    foreground = AppUi.foreground
                 }
+                border = BorderFactory.createEmptyBorder(5, 10, 5, 10)
 
                 return c
+            }
+
+            override fun paintComponent(g: Graphics) {
+                val g2 = g.create() as Graphics2D
+                try {
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    if (selected) {
+                        g2.color = AppUi.accentSurface
+                        g2.fillRoundRect(2, 2, width - 4, height - 4, AppUi.radius, AppUi.radius)
+                    }
+                } finally {
+                    g2.dispose()
+                }
+                super.paintComponent(g)
             }
         }
 
@@ -130,7 +135,6 @@ abstract class OptionsPane : JPanel(BorderLayout()), Disposable {
         }
 
         options.add(option)
-        contentPanel.add(option.getJComponent(), option.getTitle())
 
         tabListModel.clear()
         for (e in OptionSorter.sortOptions(options)) {
@@ -157,9 +161,10 @@ abstract class OptionsPane : JPanel(BorderLayout()), Disposable {
             if (tabList.selectedIndex >= 0) {
                 val option = tabListModel.get(tabList.selectedIndex)
                 val title = option.getTitle()
+                option.onSelected()
 
                 if (!loadedComponents.containsKey(title)) {
-                    val component = option.getJComponent()
+                    val component = decorateOptionComponent(option, option.getJComponent())
                     loadedComponents[title] = component
                     contentPanel.add(component, title)
                     if (themeChanged) SwingUtilities.updateComponentTreeUI(component)
@@ -176,14 +181,6 @@ abstract class OptionsPane : JPanel(BorderLayout()), Disposable {
             }
         }
 
-        tabList.addListSelectionListener {
-            val index = tabList.selectedIndex
-            if (index >= 0) {
-                // 选中事件
-                tabListModel.getElementAt(index).onSelected()
-            }
-        }
-
         // 监听主题变化
         DynamicExtensionHandler.getInstance().register(ThemeChangeExtension::class.java, object : ThemeChangeExtension {
             override fun onChanged() {
@@ -191,6 +188,12 @@ abstract class OptionsPane : JPanel(BorderLayout()), Disposable {
             }
         }).let { Disposer.register(this, it) }
     }
+
+    /**
+     * Allows specialized option panes to provide a page shell without changing the option itself.
+     * The original component remains in the hierarchy, so option lifecycle and descendant lookup keep working.
+     */
+    protected open fun decorateOptionComponent(option: Option, component: JComponent): JComponent = component
 
 
     interface Option {

@@ -234,14 +234,12 @@ class ApplicationRunner {
         UIManager.put(FlatClientProperties.USE_WINDOW_DECORATIONS, false)
         UIManager.put(FlatClientProperties.POPUP_FORCE_HEAVY_WEIGHT, true)
 
-        UIManager.put("Component.arc", 5)
-        UIManager.put("TextComponent.arc", UIManager.getInt("Component.arc"))
-        UIManager.put("Component.hideMnemonics", true)
+        AppUi.install()
 
-        UIManager.put("TitleBar.height", 36)
+        UIManager.put("TitleBar.height", 40)
 
-        UIManager.put("Dialog.width", 650)
-        UIManager.put("Dialog.height", 550)
+        UIManager.put("Dialog.width", 700)
+        UIManager.put("Dialog.height", 580)
 
         if (SystemInfo.isMacOS) {
             UIManager.put("TabbedPane.tabHeight", UIManager.getInt("TitleBar.height"))
@@ -261,12 +259,9 @@ class ApplicationRunner {
         UIManager.put("AuditoryCues.playList", null)
         UIManager.getLookAndFeelDefaults().put("AuditoryCues.playList", null)
 
-        UIManager.put("Table.rowHeight", 24)
         UIManager.put("Table.focusCellHighlightBorder", FlatTableCellBorder.Default())
         UIManager.put("Table.focusSelectedCellHighlightBorder", FlatTableCellBorder.Default())
 
-        UIManager.put("Tree.rowHeight", 24)
-        UIManager.put("Tree.background", DynamicColor("window"))
         UIManager.put("Tree.showCellFocusIndicator", false)
         UIManager.put("Tree.repaintWholeRow", true)
 
