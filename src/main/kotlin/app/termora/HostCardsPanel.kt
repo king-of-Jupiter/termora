@@ -1,569 +1,747 @@
 package app.termora
 
 import app.termora.account.AccountManager
-import app.termora.actions.NewHostAction
 import app.termora.actions.OpenHostAction
 import app.termora.database.DataType
 import app.termora.database.DatabaseChangedExtension
 import app.termora.plugin.internal.extension.DynamicExtensionHandler
-import app.termora.plugin.internal.ssh.SSHProtocolProvider
+import app.termora.plugin.internal.ssh.OSDetector
 import app.termora.protocol.ProtocolProvider
 import app.termora.tree.NewHostTree
 import com.formdev.flatlaf.FlatLaf
+import com.formdev.flatlaf.extras.components.FlatButton
+import com.formdev.flatlaf.util.UIScale
 import org.apache.commons.lang3.StringUtils
 import org.jdesktop.swingx.action.ActionManager
 import java.awt.*
-import java.awt.event.ComponentAdapter
-import java.awt.event.ComponentEvent
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
+import java.awt.event.*
+import java.awt.image.BufferedImage
 import javax.swing.*
 import javax.swing.Timer
 
-/**
- * Termius 风格的主机卡片视图：把所有服务器以较大的卡片形式按文件夹分组展示，
- * 双击卡片即可连接，并提供一个醒目的「新建主机」卡片。
- *
- * 数据来源与刷新逻辑参考 [app.termora.tree.NewHostTreeModel]。
- */
-class HostCardsPanel(private val hostTreeProvider: () -> NewHostTree? = { null }) : JPanel(BorderLayout()), Disposable {
-
+class HostCardsPanel(
+    private val hostTreeProvider: () -> NewHostTree? = { null },
+    private val onHostCountChanged: (visible: Int, total: Int) -> Unit = { _, _ -> },
+) : JPanel(BorderLayout()), Disposable {
     private val hostManager get() = HostManager.getInstance()
     private val accountManager get() = AccountManager.getInstance()
     private val actionManager get() = ActionManager.getInstance()
-
-    private val contentPanel = JPanel(GridBagLayout())
-    private val scrollPane = JScrollPane(contentPanel)
-
-    private val cardWidth = 220
-    private val cardHeight = 64
-    private val iconSize = 28
-
-    private var filterText: String = StringUtils.EMPTY
-
-    companion object {
-        private const val ANIM_DURATION = 120f // мс, длительность hover-анимации
+    private val hostCards = mutableListOf<HostCard>()
+    private val contentPanel = object : JPanel(GridBagLayout()), Scrollable {
+        override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
+        override fun getScrollableTracksViewportWidth(): Boolean = true
+        override fun getScrollableTracksViewportHeight(): Boolean = false
+        override fun getScrollableUnitIncrement(rect: Rectangle, orientation: Int, direction: Int): Int = UIScale.scale(24)
+        override fun getScrollableBlockIncrement(rect: Rectangle, orientation: Int, direction: Int): Int =
+            (rect.height - UIScale.scale(96)).coerceAtLeast(UIScale.scale(24))
     }
+    private val scrollPane = JScrollPane(contentPanel)
+    private var filterText: String = StringUtils.EMPTY
+    private var draggingCard: HostCard? = null
+    private var dropGroup: HostGroupPanel? = null
+    private var dropCard: HostCard? = null
+    private var dropIndex: Int = -1
+    private var dropAfter: Boolean = false
+    private var dragGhost: DragGhost? = null
 
     init {
-        initView()
-        initEvents()
-        rebuild()
-    }
-
-    private fun initView() {
+        isOpaque = false
         contentPanel.isOpaque = false
-        contentPanel.border = BorderFactory.createEmptyBorder(4, 4, 4, 4)
-
         scrollPane.border = BorderFactory.createEmptyBorder()
         scrollPane.horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        scrollPane.verticalScrollBar.unitIncrement = 16
         scrollPane.viewport.isOpaque = false
         scrollPane.isOpaque = false
-
         add(scrollPane, BorderLayout.CENTER)
-    }
-
-    private fun initEvents() {
-        // 视口宽度变化时重新布局，使卡片正确换行
         scrollPane.viewport.addComponentListener(object : ComponentAdapter() {
             override fun componentResized(e: ComponentEvent) {
                 contentPanel.revalidate()
             }
         })
-
-        // 底层数据变动时刷新卡片
+        contentPanel.addMouseListener(object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) = showRootMenu(e)
+            override fun mouseReleased(e: MouseEvent) = showRootMenu(e)
+            private fun showRootMenu(e: MouseEvent) {
+                if (e.isPopupTrigger) hostTreeProvider()?.showContextmenuForRoot(contentPanel, e.x, e.y)
+            }
+        })
         DynamicExtensionHandler.getInstance()
             .register(DatabaseChangedExtension::class.java, object : DatabaseChangedExtension {
                 override fun onDataChanged(
-                    id: String,
-                    type: String,
-                    action: DatabaseChangedExtension.Action,
-                    source: DatabaseChangedExtension.Source
+                    id: String, type: String, action: DatabaseChangedExtension.Action,
+                    source: DatabaseChangedExtension.Source,
                 ) {
                     if (type.isNotBlank() && type != DataType.Host.name) return
                     SwingUtilities.invokeLater { rebuild() }
                 }
             }).let { Disposer.register(this, it) }
-
-        // 主题变化时重建（图标按主题选择明/暗变体）
         DynamicExtensionHandler.getInstance()
             .register(ThemeChangeExtension::class.java, object : ThemeChangeExtension {
-                override fun onChanged() {
-                    SwingUtilities.invokeLater { rebuild() }
-                }
+                override fun onChanged() = rebuild()
             }).let { Disposer.register(this, it) }
-    }
-
-    /**
-     * 根据搜索文本过滤卡片
-     */
-    fun filter(text: String) {
-        val t = text.trim()
-        if (t == filterText) return
-        filterText = t
         rebuild()
     }
 
-    private fun matches(host: Host): Boolean {
-        if (filterText.isBlank()) return true
-        return host.name.contains(filterText, ignoreCase = true)
-                || host.host.contains(filterText, ignoreCase = true)
-                || host.username.contains(filterText, ignoreCase = true)
-                || host.remark.contains(filterText, ignoreCase = true)
+    fun filter(text: String) {
+        val query = text.trim()
+        if (query == filterText) return
+        filterText = query
+        rebuild()
+        scrollPane.verticalScrollBar.value = 0
     }
 
-    private fun rebuild() {
-        contentPanel.removeAll()
+    fun focusHost(last: Boolean = false) {
+        val card = if (last) hostCards.lastOrNull() else hostCards.firstOrNull()
+        card?.requestFocusInWindow()
+    }
 
+    fun openFirstHost(event: InputEvent) {
+        hostCards.firstOrNull()?.open(event)
+    }
+
+    private fun matches(host: Host): Boolean = filterText.isBlank() ||
+        listOf(host.name, host.host, host.username, host.remark).any { it.contains(filterText, ignoreCase = true) }
+
+    private fun rebuild() {
+        removeDragGhost()
+        clearDropTarget()
+        draggingCard = null
+        hostCards.forEach { it.stopAnimations() }
+        hostCards.clear()
+        contentPanel.removeAll()
         val ownerIds = accountManager.getOwnerIds()
-        val all = hostManager.hosts().filter { ownerIds.contains(it.ownerId) && it.isTemporary.not() }
+        val all = hostManager.hosts().filter { it.ownerId in ownerIds && !it.isTemporary }
         val folders = all.filter { it.isFolder }.sortedBy { it.sort }
         val folderIds = folders.map { it.id }.toSet()
-        val realHosts = all.filter { it.isFolder.not() && matches(it) }
-
-        val rootHosts = realHosts.filter {
-            it.parentId.isBlank() || it.parentId == "0" || folderIds.contains(it.parentId).not()
+        val totalHosts = all.filterNot { it.isFolder }
+        val visibleHosts = totalHosts.filter(::matches)
+        onHostCountChanged(visibleHosts.size, totalHosts.size)
+        val rootHosts = visibleHosts.filter { it.parentId.isBlank() || it.parentId == "0" || it.parentId !in folderIds }
+        var row = 0
+        if (rootHosts.isNotEmpty() || filterText.isBlank() && folders.isNotEmpty()) {
+            addGroup(I18n.getString("termora.welcome.my-hosts"), "0", null, rootHosts, row++)
         }
-
-        val row = intArrayOf(0)
-        var rendered = false
-
-        // 根分组「我的主机」：始终在未搜索时显示（带新建卡片）
-        if (filterText.isBlank() || rootHosts.isNotEmpty()) {
-            addGroup(I18n.getString("termora.welcome.my-hosts"), rootHosts, filterText.isBlank(), row)
-            rendered = true
-        }
-
-        // 文件夹分组
         for (folder in folders) {
-            val hosts = realHosts.filter { it.parentId == folder.id }
-            if (hosts.isEmpty()) continue
-            addGroup(folder.name, hosts, includeAddCard = false, row = row)
-            rendered = true
+            val hosts = visibleHosts.filter { it.parentId == folder.id }
+            if (hosts.isNotEmpty() || filterText.isBlank()) addGroup(folder.name, folder.id, folder.ownerId, hosts, row++)
         }
-
-        // 搜索无结果提示
-        if (rendered.not()) {
-            val label = JLabel(I18n.getString("termora.welcome.no-hosts"))
-            label.foreground = DynamicColor("textInactiveText")
-            label.horizontalAlignment = SwingConstants.CENTER
-            val gbc = GridBagConstraints().apply {
-                gridx = 0; gridy = row[0]++; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
-                insets = Insets(20, 8, 8, 8)
+        if (visibleHosts.isEmpty()) {
+            val empty = JPanel(BorderLayout(0, UIScale.scale(10))).apply {
+                isOpaque = false
+                border = BorderFactory.createEmptyBorder(UIScale.scale(64), 0, UIScale.scale(64), 0)
             }
-            contentPanel.add(label, gbc)
+            val titleKey = if (filterText.isBlank()) "termora.welcome.no-hosts" else "termora.welcome.no-results"
+            val hintKey = if (filterText.isBlank()) "termora.welcome.empty-hint" else "termora.welcome.no-results-hint"
+            empty.add(JLabel(I18n.getString(titleKey), SwingConstants.CENTER).apply {
+                font = font.deriveFont(Font.BOLD, UIScale.scale(18f))
+                foreground = HostViewStyle.foreground
+            }, BorderLayout.CENTER)
+            empty.add(JLabel(I18n.getString(hintKey), SwingConstants.CENTER).apply {
+                font = font.deriveFont(UIScale.scale(13f))
+                foreground = HostViewStyle.secondary
+            }, BorderLayout.SOUTH)
+            contentPanel.add(empty, rowConstraints(row++))
         }
-
-        // 底部填充，把内容顶到上方
-        val filler = GridBagConstraints().apply {
-            gridx = 0; gridy = row[0]++; weightx = 1.0; weighty = 1.0; fill = GridBagConstraints.BOTH
-        }
-        contentPanel.add(Box.createGlue(), filler)
-
+        contentPanel.add(Box.createGlue(), rowConstraints(row).apply { weighty = 1.0; fill = GridBagConstraints.BOTH })
         contentPanel.revalidate()
         contentPanel.repaint()
     }
 
-    private fun addGroup(title: String, hosts: List<Host>, includeAddCard: Boolean, row: IntArray) {
-        val headerText = if (hosts.isNotEmpty()) "$title  (${hosts.size})" else title
-        val header = JLabel(headerText)
-        header.font = header.font.deriveFont(Font.BOLD)
-        header.foreground = DynamicColor("textInactiveText")
-        header.border = BorderFactory.createEmptyBorder(if (row[0] == 0) 6 else 18, 6, 6, 6)
-        contentPanel.add(header, rowConstraints(row))
-
-        val cards = JPanel(WrapLayout(FlowLayout.LEFT, 10, 10))
-        cards.isOpaque = false
-        if (includeAddCard) cards.add(AddCard())
-        for (host in hosts.sortedBy { it.sort }) {
-            cards.add(HostCard(host))
+    private fun addGroup(title: String, parentId: String, ownerId: String?, hosts: List<Host>, row: Int) {
+        val group = JPanel(BorderLayout(0, UIScale.scale(12))).apply {
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(if (row == 0) 0 else UIScale.scale(24), 0, 0, 0)
         }
-        contentPanel.add(cards, rowConstraints(row))
-    }
-
-    private fun rowConstraints(row: IntArray): GridBagConstraints {
-        return GridBagConstraints().apply {
-            gridx = 0; gridy = row[0]++; weightx = 1.0
-            fill = GridBagConstraints.HORIZONTAL
-            anchor = GridBagConstraints.NORTHWEST
+        val header = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { isOpaque = false }
+        header.add(JLabel(title).apply {
+            font = font.deriveFont(Font.BOLD, UIScale.scale(14f))
+            foreground = HostViewStyle.foreground
+        })
+        header.add(JLabel(hosts.size.toString()).apply {
+            font = font.deriveFont(UIScale.scale(12f))
+            foreground = HostViewStyle.secondary
+            border = BorderFactory.createEmptyBorder(0, UIScale.scale(10), 0, 0)
+        })
+        group.add(header, BorderLayout.NORTH)
+        val cards = HostGroupPanel(parentId, ownerId)
+        hosts.sortedBy { it.sort }.forEach { host ->
+            val card = HostCard(host)
+            hostCards.add(card)
+            cards.add(card)
         }
+        group.add(cards, BorderLayout.CENTER)
+        contentPanel.add(group, rowConstraints(row))
     }
 
-    private fun protocolIcon(protocol: String): Icon {
-        val base = ProtocolProvider.valueOf(protocol)?.getIcon() ?: Icons.terminal
-        val themed = if (FlatLaf.isLafDark()) base.dark else base
-        return themed.derive(iconSize, iconSize)
-    }
+    private inner class HostGroupPanel(
+        val parentId: String,
+        private val ownerId: String?,
+    ) : JPanel(HostCardGridLayout { scrollPane.viewport.extentSize.width }) {
+        init {
+            isOpaque = false
+        }
 
-    private fun getHostIcon(host: Host): Icon {
-        // Check if OS was detected
-        val osIconName = host.options.extras["osIcon"]
-        if (osIconName != null) {
+        fun accepts(host: Host): Boolean = ownerId == null || ownerId == host.ownerId
+
+        override fun getPreferredSize(): Dimension {
+            val size = super.getPreferredSize()
+            if (componentCount == 0 && filterText.isBlank()) size.height = UIScale.scale(32)
+            return size
+        }
+
+        override fun paintComponent(g: Graphics) {
+            super.paintComponent(g)
+            if (dropGroup !== this || dropCard != null) return
+            val g2 = g.create() as Graphics2D
             try {
-                val osType = app.termora.plugin.internal.ssh.OSDetector.OSType.valueOf(osIconName)
-                val base = osType.getIcon()
-                if (base is DynamicIcon) {
-                    val themed = if (FlatLaf.isLafDark()) base.dark else base
-                    return themed.derive(iconSize, iconSize)
-                }
-                return base
-            } catch (e: Exception) {
-                // Invalid OS type, fall through to protocol icon
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g2.color = HostViewStyle.accent
+                g2.stroke = BasicStroke(UIScale.scale(2f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                val y = if (componentCount == 0) height / 2 else (height - UIScale.scale(2)).coerceAtLeast(1)
+                g2.drawLine(UIScale.scale(8), y, (width - UIScale.scale(8)).coerceAtLeast(UIScale.scale(8)), y)
+            } finally {
+                g2.dispose()
             }
         }
-        return protocolIcon(host.protocol)
     }
 
-    /**
-     * Карточка с плавной hover-анимацией и pressed-эффектом.
-     */
-    private abstract inner class RoundedCard : JPanel() {
-        protected var hoverAlpha = 0f // 0..255
-        protected var pressed = false
-        private var hoverTarget = false
-        private var animStart = 0L
-        private var animTimer: Timer? = null
+    private fun startCardDrag(card: HostCard, anchor: Point) {
+        if (filterText.isNotBlank()) return
+        val layeredPane = card.rootPane?.layeredPane ?: return
+        if (card.width <= 0 || card.height <= 0) return
 
-        private val normalBg: Color
-            get() = UIManager.getColor("TextField.background") ?: background
+        card.pressed = false
+        val snapshot = BufferedImage(card.width, card.height, BufferedImage.TYPE_INT_ARGB)
+        val snapshotGraphics = snapshot.createGraphics()
+        try {
+            card.printAll(snapshotGraphics)
+        } finally {
+            snapshotGraphics.dispose()
+        }
 
-        private val hoverBg: Color
-            get() = UIManager.getColor("List.selectionInactiveBackground")
-                ?: UIManager.getColor("Component.background")
-                ?: background
+        draggingCard = card
+        card.cursor = Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
+        dragGhost = DragGhost(snapshot, layeredPane, Point(anchor)).also {
+            layeredPane.add(it, JLayeredPane.DRAG_LAYER)
+            layeredPane.repaint()
+        }
+        card.repaint()
+    }
+
+    private fun updateCardDrag(source: HostCard, point: Point) {
+        if (draggingCard !== source) return
+        dragGhost?.follow(source, point)
+        val contentPoint = SwingUtilities.convertPoint(source, point, contentPanel)
+        val deepest = SwingUtilities.getDeepestComponentAt(contentPanel, contentPoint.x, contentPoint.y)
+        val hoveredCard = ancestorOfType<HostCard>(deepest)
+        val group = (hoveredCard?.parent as? HostGroupPanel) ?: ancestorOfType<HostGroupPanel>(deepest)
+        if (group == null || !group.accepts(source.host)) {
+            clearDropTarget()
+            return
+        }
+
+        val cards = group.components.filterIsInstance<HostCard>()
+        val rawIndex: Int
+        var after = false
+        if (hoveredCard != null) {
+            val cardIndex = cards.indexOf(hoveredCard)
+            if (cardIndex < 0) {
+                clearDropTarget()
+                return
+            }
+            val cardPoint = SwingUtilities.convertPoint(contentPanel, contentPoint, hoveredCard)
+            after = cardPoint.x >= hoveredCard.width / 2
+            rawIndex = cardIndex + if (after) 1 else 0
+        } else {
+            rawIndex = cards.size
+        }
+
+        val sourceGroup = source.parent as? HostGroupPanel
+        val sourceIndex = sourceGroup?.components?.filterIsInstance<HostCard>()?.indexOf(source) ?: -1
+        val targetIndex = if (sourceGroup === group && sourceIndex >= 0 && rawIndex > sourceIndex) rawIndex - 1 else rawIndex
+        if (sourceGroup === group && targetIndex == sourceIndex) {
+            clearDropTarget()
+            return
+        }
+        setDropTarget(group, hoveredCard, targetIndex, after)
+    }
+
+    private fun finishCardDrag(source: HostCard) {
+        val group = dropGroup
+        val targetIndex = dropIndex
+        clearDropTarget()
+        draggingCard = null
+        releaseDragGhost()
+        source.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        source.repaint()
+        if (group == null || targetIndex < 0) return
+
+        val ownerIds = accountManager.getOwnerIds()
+        val all = hostManager.hosts().filter { it.ownerId in ownerIds && !it.isTemporary }
+        val folderIds = all.filter { it.isFolder }.mapTo(mutableSetOf()) { it.id }
+        cardDropUpdates(all, source.host.id, group.parentId, targetIndex, folderIds).forEach(hostManager::addHost)
+    }
+
+    private fun releaseDragGhost() {
+        val ghost = dragGhost ?: return
+        dragGhost = null
+        ghost.release()
+    }
+
+    private fun removeDragGhost() {
+        val ghost = dragGhost ?: return
+        dragGhost = null
+        ghost.disposeGhost()
+    }
+
+    private inner class DragGhost(
+        private val image: BufferedImage,
+        private val layeredPane: JLayeredPane,
+        private val anchor: Point,
+    ) : JComponent() {
+        private val padding = UIScale.scale(20)
+        private var lift = 0f
+        private var opacity = 1f
+        private var animation: Timer? = null
 
         init {
             isOpaque = false
             isFocusable = false
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            border = BorderFactory.createEmptyBorder(8, 10, 8, 10)
-            preferredSize = Dimension(cardWidth, cardHeight)
-            maximumSize = preferredSize
-            addMouseListener(object : MouseAdapter() {
-                override fun mouseEntered(e: MouseEvent) {
-                    startHover(true)
-                }
-
-                override fun mouseExited(e: MouseEvent) {
-                    pressed = false
-                    startHover(false)
-                }
-
-                override fun mousePressed(e: MouseEvent) {
-                    if (SwingUtilities.isLeftMouseButton(e)) {
-                        pressed = true; repaint()
-                    }
-                }
-
-                override fun mouseReleased(e: MouseEvent) {
-                    pressed = false; repaint()
-                }
-            })
+            setSize(image.width + padding * 2, image.height + padding * 2)
+            animateLift()
         }
 
-        private fun startHover(target: Boolean) {
-            hoverTarget = target
-            animStart = System.nanoTime()
-            animTimer?.stop()
-            animTimer = Timer(16, null).apply {
-                addActionListener {
-                    val elapsed = (System.nanoTime() - animStart) / 1_000_000f
-                    val progress = (elapsed / ANIM_DURATION).coerceIn(0f, 1f)
-                    val eased = 1f - (1f - progress) * (1f - progress) // ease-out
-                    hoverAlpha = if (hoverTarget) eased * 255f else (1f - eased) * 255f
-                    if (progress >= 1f) {
-                        hoverAlpha = if (hoverTarget) 255f else 0f
-                        stop()
-                    }
-                    repaint()
-                }
-                isRepeats = true
-                start()
-            }
-        }
-
-        override fun paintComponent(g: Graphics) {
-            val g2 = g.create() as Graphics2D
-            try {
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
-                val arc = 14
-
-                val alpha = (hoverAlpha / 255f).coerceIn(0f, 1f)
-                val bg = if (alpha > 0.01f) blend(normalBg, hoverBg, alpha) else normalBg
-                val finalBg = if (pressed) bg.darker() else bg
-
-                // Multi-layer shadow for depth (Apple style)
-                if (alpha > 0.01f) {
-                    // Outer shadow - wide, soft
-                    val s1 = (alpha * 18).toInt().coerceIn(0, 18)
-                    g2.color = Color(0, 0, 0, s1)
-                    g2.fillRoundRect(0, 3, width - 1, height - 1, arc, arc)
-                    // Inner shadow - tighter
-                    val s2 = (alpha * 12).toInt().coerceIn(0, 12)
-                    g2.color = Color(0, 0, 0, s2)
-                    g2.fillRoundRect(0, 1, width - 1, height - 1, arc, arc)
-                }
-
-                // Card background
-                g2.color = finalBg
-                g2.fillRoundRect(0, 0, width - 1, height - 2, arc, arc)
-
-                // Border - very thin, barely visible
-                g2.color = if (alpha > 0.2f)
-                    blend(DynamicColor.BorderColor, UIManager.getColor("Component.accentColor") ?: DynamicColor.BorderColor, alpha * 0.2f)
-                else
-                    DynamicColor.BorderColor
-                g2.drawRoundRect(0, 0, width - 1, height - 2, arc, arc)
-            } finally {
-                g2.dispose()
-            }
-            super.paintComponent(g)
-        }
-
-        private fun blend(c1: Color, c2: Color, t: Float): Color {
-            val r = (c1.red + (c2.red - c1.red) * t).toInt().coerceIn(0, 255)
-            val g = (c1.green + (c2.green - c1.green) * t).toInt().coerceIn(0, 255)
-            val b = (c1.blue + (c2.blue - c1.blue) * t).toInt().coerceIn(0, 255)
-            return Color(r, g, b)
-        }
-    }
-
-    private inner class HostCard(private val host: Host) : RoundedCard() {
-        var loading = false
-            private set
-        private var loadingProgress = 0f
-        private var loadingTimer: Timer? = null
-
-        init {
-            layout = BorderLayout(8, 0)
-
-            // Use OS-specific icon if detected, otherwise protocol icon
-            val icon = getHostIcon(host)
-            val iconLabel = JLabel(icon)
-            iconLabel.verticalAlignment = SwingConstants.CENTER
-            add(iconLabel, BorderLayout.WEST)
-
-            val box = Box.createVerticalBox()
-            // Dynamic font size based on card height
-            val nameFontSize = (cardHeight * 0.22f).coerceIn(12f, 16f)
-            val subFontSize = (cardHeight * 0.15f).coerceIn(9f, 12f)
-
-            val nameLabel = JLabel(host.name)
-            nameLabel.font = nameLabel.font.deriveFont(Font.BOLD, nameFontSize)
-            nameLabel.alignmentX = LEFT_ALIGNMENT
-            box.add(nameLabel)
-
-            val subtitle = subtitleOf(host)
-            if (subtitle.isNotBlank()) {
-                box.add(Box.createVerticalStrut(2))
-                val subLabel = JLabel(subtitle)
-                subLabel.foreground = DynamicColor("textInactiveText")
-                subLabel.font = subLabel.font.deriveFont(subFontSize)
-                subLabel.alignmentX = LEFT_ALIGNMENT
-                box.add(subLabel)
-            }
-
-            // Add protocol/port info if there's space
-            val extraInfo = extraInfoOf(host)
-            if (extraInfo.isNotBlank() && cardHeight > 55) {
-                box.add(Box.createVerticalStrut(1))
-                val extraLabel = JLabel(extraInfo)
-                extraLabel.foreground = DynamicColor("textInactiveText")
-                extraLabel.font = extraLabel.font.deriveFont(subFontSize - 1f)
-                extraLabel.alignmentX = LEFT_ALIGNMENT
-                box.add(extraLabel)
-            }
-            add(box, BorderLayout.CENTER)
-
-            toolTipText = if (host.remark.isNotBlank()) host.remark else subtitle
-
-            addMouseListener(object : MouseAdapter() {
-                override fun mousePressed(e: MouseEvent) {
-                    if (e.isPopupTrigger) {
-                        hostTreeProvider()?.showContextmenuForHost(host, this@HostCard, e.x, e.y)
-                        return
-                    }
-
-                    val isLeft = SwingUtilities.isLeftMouseButton(e)
-                    val isMiddle = SwingUtilities.isMiddleMouseButton(e)
-
-                    if (isLeft || isMiddle) {
-                        if (loading) return
-                        startLoading()
-                        val selectTab = isLeft
-                        actionManager.getAction(OpenHostAction.OPEN_HOST)
-                            ?.actionPerformed(OpenHostActionEvent(this@HostCard, host, e, selected = selectTab))
-                        Timer(3000) { stopLoading() }.apply { isRepeats = false; start() }
-                    }
-                }
-
-                override fun mouseReleased(e: MouseEvent) {
-                    if (e.isPopupTrigger) {
-                        hostTreeProvider()?.showContextmenuForHost(host, this@HostCard, e.x, e.y)
-                    }
-                }
-            })
-        }
-
-        fun startLoading() {
-            loading = true
-            loadingProgress = 0f
-            loadingTimer?.stop()
-            // 33ms = ~30fps instead of 16ms = 60fps to reduce EDT pressure
-            loadingTimer = Timer(33, null).apply {
-                addActionListener {
-                    loadingProgress += 0.03f
-                    if (loadingProgress >= 1f) loadingProgress = 0f
-                    repaint()
-                }
-                isRepeats = true
-                start()
-            }
-        }
-
-        fun stopLoading() {
-            loading = false
-            loadingTimer?.stop()
-            loadingTimer = null
+        fun follow(source: JComponent, point: Point) {
+            val cursor = SwingUtilities.convertPoint(source, point, layeredPane)
+            setLocation(cursor.x - anchor.x - padding, cursor.y - anchor.y - padding)
             repaint()
         }
 
-        override fun paintComponent(g: Graphics) {
-            super.paintComponent(g)
-            if (!loading) return
+        private fun animateLift() {
+            val startedAt = System.nanoTime()
+            animation = Timer(16, null).apply {
+                addActionListener {
+                    val progress = ((System.nanoTime() - startedAt) / 140_000_000f).coerceIn(0f, 1f)
+                    val eased = 1f - (1f - progress) * (1f - progress) * (1f - progress)
+                    lift = eased
+                    repaint()
+                    if (progress >= 1f) stop()
+                }
+                start()
+            }
+        }
 
+        fun release() {
+            animation?.stop()
+            val fromLift = lift
+            val startedAt = System.nanoTime()
+            animation = Timer(16, null).apply {
+                addActionListener {
+                    val progress = ((System.nanoTime() - startedAt) / 120_000_000f).coerceIn(0f, 1f)
+                    val eased = progress * progress
+                    lift = fromLift * (1f - eased)
+                    opacity = 1f - progress
+                    repaint()
+                    if (progress >= 1f) {
+                        stop()
+                        disposeGhost()
+                    }
+                }
+                start()
+            }
+        }
+
+        fun disposeGhost() {
+            animation?.stop()
+            animation = null
+            parent?.remove(this)
+            layeredPane.repaint(bounds.x, bounds.y, bounds.width, bounds.height)
+        }
+
+        override fun paintComponent(g: Graphics) {
             val g2 = g.create() as Graphics2D
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                val arc = 14
+                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
 
-                // Pulsing accent border
-                val accent = UIManager.getColor("Component.accentColor")
-                    ?: UIManager.getColor("List.selectionBackground")
-                    ?: Color(100, 149, 237)
-                val pulse = (kotlin.math.sin(loadingProgress.toDouble() * kotlin.math.PI * 2) * 0.5 + 0.5).coerceIn(0.0, 1.0).toFloat()
-                val borderAlpha = (60 + pulse * 120).toInt().coerceIn(60, 180)
-                g2.color = Color(accent.red, accent.green, accent.blue, borderAlpha)
-                g2.stroke = BasicStroke(2f)
-                g2.drawRoundRect(1, 1, width - 3, height - 4, arc, arc)
+                val scale = 1f + 0.045f * lift
+                val imageWidth = (image.width * scale).toInt()
+                val imageHeight = (image.height * scale).toInt()
+                val imageX = padding + (image.width - imageWidth) / 2
+                val imageY = padding + (image.height - imageHeight) / 2 - (UIScale.scale(3) * lift).toInt()
+                val arc = UIScale.scale(14)
+                val shadowOffset = UIScale.scale(6)
 
-                // Loading dots at bottom right
-                val dotSize = 4
-                val dotSpacing = 8
-                val dotsX = width - 30
-                val dotsY = height - 14
-                for (i in 0 until 3) {
-                    val phase = (loadingProgress + i * 0.33f) % 1f
-                    val dotAlpha = (kotlin.math.sin(phase.toDouble() * kotlin.math.PI) * 200).toInt().coerceIn(30, 200)
-                    g2.color = Color(accent.red, accent.green, accent.blue, dotAlpha)
-                    g2.fillOval(dotsX + i * dotSpacing, dotsY, dotSize, dotSize)
+                for (spread in UIScale.scale(10) downTo UIScale.scale(2) step UIScale.scale(2).coerceAtLeast(1)) {
+                    val strength = (1f - spread / UIScale.scale(12f)).coerceIn(0.05f, 0.55f)
+                    g2.composite = AlphaComposite.SrcOver.derive(opacity * lift * strength * 0.22f)
+                    g2.color = Color.BLACK
+                    g2.fillRoundRect(
+                        imageX - spread,
+                        imageY + shadowOffset - spread / 2,
+                        imageWidth + spread * 2,
+                        imageHeight + spread,
+                        arc + spread,
+                        arc + spread,
+                    )
                 }
+
+                g2.composite = AlphaComposite.SrcOver.derive(opacity)
+                g2.drawImage(image, imageX, imageY, imageWidth, imageHeight, null)
             } finally {
                 g2.dispose()
             }
         }
-
-        private fun subtitleOf(host: Host): String {
-            return when {
-                StringUtils.equalsIgnoreCase(host.protocol, SSHProtocolProvider.PROTOCOL) ->
-                    if (host.username.isNotBlank()) "${host.username}@${host.host}" else host.host
-
-                host.protocol == "Serial" -> host.options.serialComm.port
-                else -> host.host
-            }
-        }
-
-        private fun extraInfoOf(host: Host): String {
-            return when {
-                StringUtils.equalsIgnoreCase(host.protocol, SSHProtocolProvider.PROTOCOL) -> {
-                    val port = if (host.port > 0) host.port else 22
-                    "SSH • ${host.host}:$port"
-                }
-                host.protocol == "Serial" -> "Serial • ${host.options.serialComm.baudRate} baud"
-                else -> host.protocol
-            }
-        }
     }
 
-    /**
-     * Карточка «Новый хост» — с пунктирной рамкой и accent-цветом.
-     */
-    private inner class AddCard : RoundedCard() {
+    private fun setDropTarget(group: HostGroupPanel, card: HostCard?, index: Int, after: Boolean) {
+        if (dropGroup === group && dropCard === card && dropIndex == index && dropAfter == after) return
+        clearDropTarget()
+        dropGroup = group
+        dropCard = card
+        dropIndex = index
+        dropAfter = after
+        if (card != null) card.dropEdge = if (after) 1 else -1
+        group.repaint()
+    }
+
+    private fun clearDropTarget() {
+        dropCard?.let {
+            it.dropEdge = 0
+            it.repaint()
+        }
+        dropGroup?.repaint()
+        dropGroup = null
+        dropCard = null
+        dropIndex = -1
+        dropAfter = false
+    }
+
+    private inline fun <reified T : Component> ancestorOfType(component: Component?): T? {
+        var current = component
+        while (current != null) {
+            if (current is T) return current
+            current = current.parent
+        }
+        return null
+    }
+
+    private fun rowConstraints(row: Int) = GridBagConstraints().apply {
+        gridx = 0; gridy = row; weightx = 1.0
+        fill = GridBagConstraints.HORIZONTAL
+        anchor = GridBagConstraints.NORTHWEST
+    }
+
+    private fun getHostIcon(host: Host): Icon {
+        val os = host.options.extras["osIcon"]?.let { name -> OSDetector.OSType.entries.find { it.name == name } }
+        val base = os?.getIcon() ?: ProtocolProvider.valueOf(host.protocol)?.getIcon() ?: Icons.terminal
+        if (base !is DynamicIcon) return base
+        return (if (FlatLaf.isLafDark()) base.dark else base).derive(22, 22)
+    }
+
+    private inner class HostCard(val host: Host) : JPanel(BorderLayout(UIScale.scale(12), 0)) {
+        private var hover = 0f
+        private var mouseInside = false
+        var pressed = false
+        var dropEdge = 0
+        private var loading = false
+        private var pressPoint: Point? = null
+        private var hoverTimer: Timer? = null
+        private var loadingTimer: Timer? = null
+        private lateinit var moreButton: FlatButton
+
         init {
-            layout = BorderLayout(8, 0)
-            isFocusable = false
-
-            val icon = (if (FlatLaf.isLafDark()) Icons.add.dark else Icons.add).derive(iconSize, iconSize)
-            val iconLabel = JLabel(icon)
-            iconLabel.verticalAlignment = SwingConstants.CENTER
-            add(iconLabel, BorderLayout.WEST)
-
-            val nameFontSize = (cardHeight * 0.22f).coerceIn(12f, 16f)
-            val nameLabel = JLabel(I18n.getString("termora.welcome.new-host"))
-            nameLabel.font = nameLabel.font.deriveFont(Font.BOLD, nameFontSize)
-            add(nameLabel, BorderLayout.CENTER)
-
+            isOpaque = false
+            isFocusable = true
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            border = BorderFactory.createEmptyBorder(UIScale.scale(12), UIScale.scale(14), UIScale.scale(12), UIScale.scale(10))
+            foreground = HostViewStyle.foreground
+            getAccessibleContext().accessibleName = "${host.name}, ${hostCardAddress(host)}"
+            toolTipText = listOf(host.name, hostCardAddress(host), host.remark).filter { it.isNotBlank() }.joinToString(" · ")
+            add(JPanel(GridBagLayout()).apply {
+                isOpaque = false
+                preferredSize = UIScale.scale(Dimension(30, 30))
+                add(JLabel(getHostIcon(host)))
+            }, BorderLayout.WEST)
+            val details = JPanel(GridBagLayout()).apply { isOpaque = false }
+            fun addLine(text: String, row: Int, size: Float, bold: Boolean, color: Color) {
+                val label = JLabel(text).apply {
+                    font = font.deriveFont(if (bold) Font.BOLD else Font.PLAIN, UIScale.scale(size))
+                    foreground = color
+                    minimumSize = Dimension(0, preferredSize.height)
+                }
+                details.add(label, GridBagConstraints().apply {
+                    gridx = 0; gridy = row; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
+                    insets = Insets(if (row == 0) 0 else UIScale.scale(4), 0, 0, 0)
+                })
+            }
+            addLine(host.name, 0, 14f, true, HostViewStyle.foreground)
+            addLine(hostCardAddress(host), 1, 12f, false, HostViewStyle.secondary)
+            add(details, BorderLayout.CENTER)
+            moreButton = FlatButton().apply {
+                icon = Icons.moreHorizontal
+                buttonType = FlatButton.ButtonType.toolBarButton
+                toolTipText = I18n.getString("termora.welcome.host-actions")
+                accessibleContext.accessibleName = "$toolTipText: ${host.name}"
+                preferredSize = UIScale.scale(Dimension(26, 26))
+                isVisible = false
+                addActionListener { showMenu(this, 0, height) }
+            }
+            add(JPanel(BorderLayout()).apply {
+                isOpaque = false
+                preferredSize = UIScale.scale(Dimension(26, 26))
+                add(moreButton, BorderLayout.NORTH)
+            }, BorderLayout.EAST)
+            addFocusListener(object : FocusAdapter() {
+                override fun focusGained(e: FocusEvent) {
+                    scrollRectToVisible(Rectangle(0, 0, width, height))
+                    updateActionsVisibility()
+                    repaint()
+                }
+                override fun focusLost(e: FocusEvent) {
+                    updateActionsVisibility()
+                    repaint()
+                }
+            })
             addMouseListener(object : MouseAdapter() {
+                override fun mouseEntered(e: MouseEvent) {
+                    mouseInside = true
+                    updateActionsVisibility()
+                    animateHover(1f)
+                }
+                override fun mouseExited(e: MouseEvent) {
+                    mouseInside = false
+                    if (draggingCard !== this@HostCard) pressed = false
+                    updateActionsVisibility()
+                    animateHover(0f)
+                }
                 override fun mousePressed(e: MouseEvent) {
-                    if (showContextMenu(e)) return
-
+                    if (e.isPopupTrigger) { showMenu(this@HostCard, e.x, e.y); return }
                     if (SwingUtilities.isLeftMouseButton(e)) {
-                        actionManager.getAction(NewHostAction.NEW_HOST)
-                            ?.actionPerformed(
-                                java.awt.event.ActionEvent(this@AddCard, java.awt.event.ActionEvent.ACTION_PERFORMED, StringUtils.EMPTY)
-                            )
+                        pressed = true
+                        pressPoint = e.point
+                        requestFocusInWindow()
+                        repaint()
+                    } else if (SwingUtilities.isMiddleMouseButton(e)) {
+                        requestFocusInWindow()
+                        open(e, selected = false)
                     }
                 }
-
                 override fun mouseReleased(e: MouseEvent) {
-                    showContextMenu(e)
+                    val wasDragging = draggingCard === this@HostCard
+                    if (wasDragging) finishCardDrag(this@HostCard)
+                    else if (SwingUtilities.isLeftMouseButton(e) && pressPoint != null && contains(e.point)) open(e)
+                    pressPoint = null
+                    pressed = false
+                    repaint()
+                    if (e.isPopupTrigger) showMenu(this@HostCard, e.x, e.y)
                 }
-
-                private fun showContextMenu(e: MouseEvent): Boolean {
-                    if (e.isPopupTrigger.not()) return false
-                    hostTreeProvider()?.showContextmenuForRoot(this@AddCard, e.x, e.y)
-                    return true
+            })
+            addMouseMotionListener(object : MouseMotionAdapter() {
+                override fun mouseDragged(e: MouseEvent) {
+                    if (e.modifiersEx and InputEvent.BUTTON1_DOWN_MASK == 0) return
+                    val start = pressPoint ?: return
+                    if (draggingCard == null) {
+                        val threshold = UIScale.scale(6)
+                        if (start.distance(e.point) < threshold) return
+                        startCardDrag(this@HostCard, start)
+                    }
+                    updateCardDrag(this@HostCard, e.point)
+                }
+            })
+            addKeyListener(object : KeyAdapter() {
+                override fun keyPressed(e: KeyEvent) {
+                    when (e.keyCode) {
+                        KeyEvent.VK_ENTER, KeyEvent.VK_SPACE -> open(e)
+                        KeyEvent.VK_LEFT -> moveFocus(-1)
+                        KeyEvent.VK_RIGHT -> moveFocus(1)
+                        KeyEvent.VK_UP -> moveVertically(-1)
+                        KeyEvent.VK_DOWN -> moveVertically(1)
+                        KeyEvent.VK_CONTEXT_MENU -> showMenu(this@HostCard, width / 2, height / 2)
+                        KeyEvent.VK_F10 -> if (e.isShiftDown) showMenu(this@HostCard, width / 2, height / 2) else return
+                        else -> return
+                    }
+                    e.consume()
                 }
             })
         }
 
-        override fun paintComponent(g: Graphics) {
+        private fun updateActionsVisibility() {
+            moreButton.isVisible = mouseInside || hasFocus()
+        }
+
+        private fun moveFocus(offset: Int) {
+            hostCards.getOrNull(hostCards.indexOf(this) + offset)?.requestFocusInWindow()
+        }
+
+        private fun moveVertically(direction: Int) {
+            val group = parent ?: return
+            val columns = (group.layout as? HostCardGridLayout)?.columns(group.width) ?: 1
+            val siblings = group.components.filterIsInstance<HostCard>()
+            val index = siblings.indexOf(this)
+            val target = siblings.getOrNull(index + direction * columns)
+            if (target != null) {
+                target.requestFocusInWindow()
+                return
+            }
+            val edge = if (direction > 0) siblings.last() else siblings.first()
+            val adjacent = hostCards.getOrNull(hostCards.indexOf(edge) + direction) ?: return
+            val adjacentCards = adjacent.parent.components.filterIsInstance<HostCard>()
+            val row = if (direction > 0) 0 else (adjacentCards.lastIndex / columns) * columns
+            adjacentCards[(row + index % columns).coerceAtMost(adjacentCards.lastIndex)].requestFocusInWindow()
+        }
+
+        private fun showMenu(component: JComponent, x: Int, y: Int) {
+            hostTreeProvider()?.showContextmenuForHost(host, component, x, y)
+        }
+
+        fun open(event: InputEvent, selected: Boolean = true) {
+            if (loading) return
+            val action = actionManager.getAction(OpenHostAction.OPEN_HOST) ?: return
+            loading = true
+            repaint()
+            action.actionPerformed(OpenHostActionEvent(this, host, event, selected = selected))
+            loadingTimer = Timer(3000) { loading = false; repaint() }.apply { isRepeats = false; start() }
+        }
+
+        private fun animateHover(target: Float) {
+            hoverTimer?.stop()
+            val from = hover
+            val start = System.nanoTime()
+            hoverTimer = Timer(16, null).apply {
+                addActionListener {
+                    val progress = ((System.nanoTime() - start) / 160_000_000f).coerceIn(0f, 1f)
+                    val eased = 1f - (1f - progress) * (1f - progress)
+                    hover = from + (target - from) * eased
+                    if (progress == 1f) stop()
+                    repaint()
+                }
+                start()
+            }
+        }
+
+        override fun paint(g: Graphics) {
+            if (draggingCard !== this) {
+                super.paint(g)
+                return
+            }
             val g2 = g.create() as Graphics2D
             try {
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
-                val arc = 14
-
-                val accent = UIManager.getColor("Component.accentColor")
-                    ?: UIManager.getColor("List.selectionInactiveBackground")
-                    ?: UIManager.getColor("Component.background")
-                    ?: background
-                val alpha = (hoverAlpha / 255f).coerceIn(0f, 1f)
-
-                // Shadow on hover
-                if (alpha > 0.01f) {
-                    val s = (alpha * 15).toInt().coerceIn(0, 15)
-                    g2.color = Color(accent.red, accent.green, accent.blue, s)
-                    g2.fillRoundRect(0, 2, width - 1, height - 1, arc, arc)
-                }
-
-                // Accent background - glass-like, intensifies on hover
-                val bgAlpha = (10 + alpha * 22).toInt().coerceIn(10, 32)
-                g2.color = Color(accent.red, accent.green, accent.blue, bgAlpha)
-                g2.fillRoundRect(0, 0, width - 1, height - 2, arc, arc)
-
-                // Dashed border - smooth, Apple-style
-                val strokeWidth = 1.0f + alpha * 0.5f
-                val stroke = BasicStroke(strokeWidth, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0f, floatArrayOf(6f, 4f), 0f)
-                g2.stroke = stroke
-                g2.color = Color(accent.red, accent.green, accent.blue, (140 + alpha * 115).toInt().coerceIn(140, 255))
-                g2.drawRoundRect(1, 1, width - 3, height - 3, arc, arc)
+                g2.composite = AlphaComposite.SrcOver.derive(0.28f)
+                super.paint(g2)
             } finally {
                 g2.dispose()
             }
+        }
+
+        override fun paintComponent(g: Graphics) {
             super.paintComponent(g)
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                val arc = UIScale.scale(12)
+                val base = HostViewStyle.surface
+                val target = HostViewStyle.hover
+                g2.color = Color(
+                    (base.red + (target.red - base.red) * hover).toInt(),
+                    (base.green + (target.green - base.green) * hover).toInt(),
+                    (base.blue + (target.blue - base.blue) * hover).toInt(),
+                ).let { if (pressed) it.darker() else it }
+                g2.fillRoundRect(1, 1, width - 2, height - 2, arc, arc)
+                if (hasFocus() || loading || hover > 0.01f) {
+                    g2.color = if (hasFocus() || loading) HostViewStyle.accent else HostViewStyle.border
+                    g2.composite = AlphaComposite.SrcOver.derive(if (hasFocus() || loading) 1f else hover * 0.8f)
+                    g2.stroke = BasicStroke(UIScale.scale(if (hasFocus()) 1.5f else 1f))
+                    g2.drawRoundRect(1, 1, width - 3, height - 3, arc, arc)
+                }
+                if (dropEdge != 0) {
+                    g2.composite = AlphaComposite.SrcOver
+                    g2.color = HostViewStyle.accent
+                    g2.stroke = BasicStroke(UIScale.scale(2f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                    val x = if (dropEdge < 0) UIScale.scale(2) else (width - UIScale.scale(3)).coerceAtLeast(1)
+                    g2.drawLine(x, UIScale.scale(10), x, (height - UIScale.scale(10)).coerceAtLeast(UIScale.scale(10)))
+                }
+            } finally {
+                g2.dispose()
+            }
+        }
+
+        fun stopAnimations() {
+            hoverTimer?.stop()
+            loadingTimer?.stop()
+            loading = false
+            pressed = false
+            pressPoint = null
+            dropEdge = 0
+            mouseInside = false
+            hover = 0f
+            if (::moreButton.isInitialized) moreButton.isVisible = false
+        }
+
+        override fun removeNotify() {
+            stopAnimations()
+            super.removeNotify()
         }
     }
+
+    override fun dispose() {
+        removeDragGhost()
+        hostCards.forEach { it.stopAnimations() }
+    }
+}
+
+internal fun hostCardAddress(host: Host): String = when {
+    host.protocol.equals("SSH", ignoreCase = true) -> {
+        val address = if (host.port > 0 && host.port != 22) {
+            val hostname = if (':' in host.host && !host.host.startsWith('[')) "[${host.host}]" else host.host
+            "$hostname:${host.port}"
+        } else host.host
+        if (host.username.isNotBlank()) "${host.username}@$address" else address
+    }
+    host.protocol == "Serial" -> host.options.serialComm.port
+    else -> host.host
+}
+
+internal fun hostCardProtocol(host: Host): String = when {
+    host.protocol.equals("SSH", ignoreCase = true) -> "SSH"
+    host.protocol == "Serial" -> "Serial · ${host.options.serialComm.baudRate} baud"
+    else -> host.protocol
+}
+
+internal fun cardDropUpdates(
+    allHosts: List<Host>,
+    draggedId: String,
+    targetParentId: String,
+    targetIndex: Int,
+    folderIds: Set<String> = allHosts.filter { it.isFolder }.mapTo(mutableSetOf()) { it.id },
+): List<Host> {
+    if (targetParentId != "0" && targetParentId !in folderIds) return emptyList()
+    val hosts = allHosts.filterNot { it.isFolder }
+    val dragged = hosts.firstOrNull { it.id == draggedId } ?: return emptyList()
+    fun parentKey(host: Host): String = if (host.parentId in folderIds) host.parentId else "0"
+
+    val sourceParentId = parentKey(dragged)
+    val source = hosts.filter { parentKey(it) == sourceParentId }.sortedBy { it.sort }
+    val target = if (sourceParentId == targetParentId) source else hosts.filter { parentKey(it) == targetParentId }.sortedBy { it.sort }
+    val updates = linkedMapOf<String, Host>()
+    val originalById = hosts.associateBy { it.id }
+
+    fun record(host: Host, sort: Long, parentId: String = host.parentId) {
+        val original = originalById[host.id] ?: host
+        if (original.sort != sort || original.parentId != parentId) {
+            updates[host.id] = original.copy(sort = sort, parentId = parentId)
+        }
+    }
+
+    if (sourceParentId == targetParentId) {
+        val ordered = source.filterNot { it.id == draggedId }.toMutableList()
+        ordered.add(targetIndex.coerceIn(0, ordered.size), dragged)
+        ordered.forEachIndexed { index, host -> record(host, index.toLong()) }
+    } else {
+        source.filterNot { it.id == draggedId }.forEachIndexed { index, host -> record(host, index.toLong()) }
+        val orderedTarget = target.filterNot { it.id == draggedId }.toMutableList()
+        val moved = dragged.copy(parentId = targetParentId)
+        orderedTarget.add(targetIndex.coerceIn(0, orderedTarget.size), moved)
+        orderedTarget.forEachIndexed { index, host -> record(host, index.toLong(), host.parentId) }
+    }
+    return updates.values.toList()
 }

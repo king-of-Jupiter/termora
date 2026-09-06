@@ -1,21 +1,23 @@
 package app.termora
 
-
 import app.termora.actions.*
 import app.termora.database.DatabaseManager
 import app.termora.findeverywhere.FindEverywhereProvider
 import app.termora.terminal.DataKey
 import app.termora.tree.*
 import com.formdev.flatlaf.FlatClientProperties
-import com.formdev.flatlaf.extras.FlatSVGIcon
 import com.formdev.flatlaf.extras.components.FlatButton
+import com.formdev.flatlaf.util.UIScale
 import org.apache.commons.lang3.StringUtils
 import org.jdesktop.swingx.action.ActionManager
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Component
 import java.awt.Dimension
+import java.awt.Font
+import java.awt.Insets
 import java.awt.KeyboardFocusManager
+import java.awt.Toolkit
 import java.awt.event.*
 import javax.swing.*
 import javax.swing.event.DocumentEvent
@@ -25,21 +27,28 @@ class WelcomePanel(
     private val embedTree: Boolean = true,
     private val externalHostTreeProvider: (() -> NewHostTree?)? = null,
 ) : JPanel(BorderLayout()), Disposable, TerminalTab, DataProvider {
-
     private val properties get() = DatabaseManager.getInstance().properties
     private val rootPanel = JPanel(BorderLayout())
     private val hostTree = NewHostTree()
+    private val countLabel = JLabel().apply {
+        font = font.deriveFont(UIScale.scale(12f))
+        foreground = HostViewStyle.secondary
+    }
     private val hostCardsPanel = HostCardsPanel(
-        hostTreeProvider = { if (embedTree) hostTree else externalHostTreeProvider?.invoke() }
+        hostTreeProvider = { currentHostTree() },
+        onHostCountChanged = { visible, total ->
+            countLabel.text = if (visible == total) I18n.getString("termora.welcome.host-count", total)
+            else I18n.getString("termora.welcome.filtered-count", visible, total)
+        },
     )
     private val centerCardLayout = CardLayout()
     private val centerPanel = JPanel(centerCardLayout)
-    private val bannerPanel = BannerPanel()
-    private val toggle = FlatButton()
+    private val toolbar = JPanel(BorderLayout(UIScale.scale(8), UIScale.scale(8)))
+    private val toolbarActions = JPanel()
+    private var stackedToolbar = false
     private var fullContent = properties.getString("WelcomeFullContent", "false").toBoolean()
     private var viewMode = if (embedTree) properties.getString("WelcomeViewMode", "cards") else "cards"
     private val dataProviderSupport = DataProviderSupport()
-    private val hostTreeModel = hostTree.model as NewHostTreeModel
     private val filterableTreeModel = FilterableTreeModel(hostTree).apply { expand = true }
     private var lastFocused: Component? = null
     private val searchTextField = filterableTreeModel.filterableTextField
@@ -49,149 +58,181 @@ class WelcomePanel(
         initEvents()
     }
 
+    private fun currentHostTree(): NewHostTree? = if (embedTree) hostTree else externalHostTreeProvider?.invoke()
 
     private fun initView() {
         putClientProperty(FlatClientProperties.TABBED_PANE_TAB_CLOSABLE, false)
         putClientProperty(FindEverywhereProvider.SKIP_FIND_EVERYWHERE, true)
-
-        val panel = JPanel(BorderLayout())
-        panel.add(createSearchPanel(), BorderLayout.NORTH)
-        panel.add(createHostPanel(), BorderLayout.CENTER)
-        bannerPanel.foreground = UIManager.getColor("TextField.placeholderForeground")
-
-        if (!fullContent) {
-            rootPanel.add(bannerPanel, BorderLayout.NORTH)
+        background = HostViewStyle.background
+        rootPanel.isOpaque = false
+        centerPanel.isOpaque = false
+        val heading = JPanel(BorderLayout(UIScale.scale(16), 0)).apply {
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(0, UIScale.scale(2), UIScale.scale(14), 0)
         }
-
-        rootPanel.add(panel, BorderLayout.CENTER)
+        val title = JLabel(I18n.getString("termora.welcome.hosts")).apply {
+            font = font.deriveFont(Font.BOLD, UIScale.scale(22f))
+            foreground = HostViewStyle.foreground
+        }
+        val titleRow = JPanel(BorderLayout(UIScale.scale(16), 0)).apply {
+            isOpaque = false
+            add(title, BorderLayout.WEST)
+            add(countLabel, BorderLayout.CENTER)
+        }
+        heading.add(titleRow, BorderLayout.CENTER)
+        val top = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(heading, BorderLayout.NORTH)
+            add(createSearchPanel(), BorderLayout.CENTER)
+            border = BorderFactory.createEmptyBorder(0, 0, UIScale.scale(20), 0)
+        }
+        rootPanel.add(top, BorderLayout.NORTH)
+        rootPanel.add(createHostPanel(), BorderLayout.CENTER)
         add(rootPanel, BorderLayout.CENTER)
-
-        // 在 Fence 布局中，主机树由侧边栏提供，这里不再注册，避免覆盖
-        if (embedTree) {
-            dataProviderSupport.addData(DataProviders.Welcome.HostTree, hostTree)
-        }
-
+        if (embedTree) dataProviderSupport.addData(DataProviders.Welcome.HostTree, hostTree)
+        perform()
     }
 
     private fun createSearchPanel(): JComponent {
-        searchTextField.focusTraversalKeysEnabled = false
-        searchTextField.preferredSize = Dimension(
-            searchTextField.preferredSize.width,
-            (UIManager.getInt("TitleBar.height") * 0.85).toInt()
-        )
-
-        // Отключить звук Windows при лишнем backspace (пустое поле)
+        searchTextField.font = searchTextField.font.deriveFont(UIScale.scale(14f))
+        searchTextField.preferredSize = UIScale.scale(Dimension(300, 34))
+        searchTextField.minimumSize = UIScale.scale(Dimension(120, 34))
+        searchTextField.placeholderText = I18n.getString("termora.welcome.search-placeholder")
+        searchTextField.accessibleContext.accessibleName = searchTextField.placeholderText
+        searchTextField.putClientProperty(FlatClientProperties.TEXT_FIELD_LEADING_ICON, Icons.find)
+        searchTextField.putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true)
+        searchTextField.putClientProperty(FlatClientProperties.STYLE, mapOf(
+            "arc" to 10,
+            "margin" to Insets(0, 12, 0, 12),
+            "background" to HostViewStyle.surface,
+            "foreground" to HostViewStyle.foreground,
+            "placeholderForeground" to HostViewStyle.secondary,
+            "borderColor" to HostViewStyle.surface,
+            "focusedBorderColor" to HostViewStyle.accent,
+            "focusColor" to HostViewStyle.accent,
+            "focusWidth" to 1,
+        ))
         searchTextField.actionMap.put("beep", object : AbstractAction() {
-            override fun actionPerformed(e: ActionEvent) {}
+            override fun actionPerformed(e: ActionEvent) = Unit
+        })
+        searchTextField.inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "clear-search")
+        searchTextField.actionMap.put("clear-search", object : AbstractAction() {
+            override fun actionPerformed(e: ActionEvent) { searchTextField.text = StringUtils.EMPTY }
         })
 
-        // Focus glow: accent bottom border with subtle glow
-        val unfocusedBorder = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, DynamicColor.BorderColor),
-            BorderFactory.createEmptyBorder(0, 0, 2, 0)
-        )
-        searchTextField.border = unfocusedBorder
-        searchTextField.addFocusListener(object : FocusAdapter() {
-            override fun focusGained(e: FocusEvent) {
-                val accent = UIManager.getColor("Component.accentColor")
-                    ?: UIManager.getColor("List.selectionBackground")
-                    ?: DynamicColor.BorderColor
-                searchTextField.border = BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(0, 0, 2, 0, accent),
-                    BorderFactory.createEmptyBorder(0, 0, 1, 0)
-                )
-            }
-
-            override fun focusLost(e: FocusEvent) {
-                searchTextField.border = unfocusedBorder
-            }
-        })
-
-        val iconSize = (searchTextField.preferredSize.height * 0.65).toInt()
-
-        val newHost = FlatButton()
-        newHost.icon = FlatSVGIcon(
-            Icons.openNewTab.name,
-            iconSize,
-            iconSize
-        )
-        newHost.isFocusable = false
-        newHost.buttonType = FlatButton.ButtonType.toolBarButton
-        newHost.addActionListener { e ->
-            ActionManager.getInstance().getAction(NewHostAction.NEW_HOST)?.actionPerformed(e)
+        val newHost = FlatButton().apply {
+            text = I18n.getString("termora.welcome.new-host")
+            icon = Icons.add
+            iconTextGap = UIScale.scale(6)
+            font = font.deriveFont(Font.BOLD, UIScale.scale(12f))
+            preferredSize = UIScale.scale(Dimension(132, 32))
+            minimumSize = preferredSize
+            maximumSize = preferredSize
+            alignmentY = Component.CENTER_ALIGNMENT
+            putClientProperty(FlatClientProperties.STYLE, mapOf(
+                "arc" to 8,
+                "background" to HostViewStyle.accentSurface,
+                "hoverBackground" to HostViewStyle.accentSurfaceHover,
+                "pressedBackground" to HostViewStyle.accentSurfaceHover,
+                "foreground" to HostViewStyle.accent,
+                "borderWidth" to 0,
+                "focusedBorderColor" to HostViewStyle.accent,
+            ))
+            addActionListener { e -> ActionManager.getInstance().getAction(NewHostAction.NEW_HOST)?.actionPerformed(e) }
         }
 
-        // 卡片 / 列表 视图切换（仅 Screen 布局内嵌树时显示）
-        val viewToggle = FlatButton()
-        viewToggle.isFocusable = false
-        viewToggle.buttonType = FlatButton.ButtonType.toolBarButton
-        fun refreshViewToggleIcon() {
-            viewToggle.icon = FlatSVGIcon(
-                (if (viewMode == "cards") Icons.listFiles else Icons.homeFolder).name,
-                iconSize, iconSize
-            )
-            viewToggle.toolTipText = I18n.getString(
-                if (viewMode == "cards") "termora.welcome.view.list" else "termora.welcome.view.cards"
-            )
-        }
-        refreshViewToggleIcon()
-        viewToggle.addActionListener {
-            viewMode = if (viewMode == "cards") "tree" else "cards"
-            centerCardLayout.show(centerPanel, viewMode)
-            refreshViewToggleIcon()
-            perform()
-        }
-
-
-        toggle.icon = FlatSVGIcon(
-            if (fullContent) Icons.collapseAll.name else Icons.expandAll.name,
-            iconSize,
-            iconSize
-        )
-        toggle.isFocusable = false
-        toggle.buttonType = FlatButton.ButtonType.toolBarButton
-        toggle.toolTipText = I18n.getString(
-            if (fullContent) "termora.welcome.collapse" else "termora.welcome.expand"
-        )
-
-        val box = Box.createHorizontalBox()
-        box.add(searchTextField)
-        box.add(Box.createHorizontalStrut(6))
-        box.add(newHost)
+        toolbarActions.isOpaque = false
+        toolbarActions.layout = BoxLayout(toolbarActions, BoxLayout.X_AXIS)
+        toolbarActions.add(Box.createHorizontalGlue())
         if (embedTree) {
-            box.add(Box.createHorizontalStrut(6))
-            box.add(viewToggle)
-        }
-        box.add(Box.createHorizontalStrut(6))
-        box.add(toggle)
-
-        if (!fullContent) {
-            box.border = BorderFactory.createEmptyBorder(24, 0, 0, 0)
-        }
-
-        toggle.addActionListener {
-            fullContent = !fullContent
-            toggle.icon = FlatSVGIcon(
-                if (fullContent) Icons.collapseAll.name else Icons.expandAll.name,
-                iconSize,
-                iconSize
-            )
-            toggle.toolTipText = I18n.getString(
-                if (fullContent) "termora.welcome.collapse" else "termora.welcome.expand"
-            )
-            if (fullContent) {
-                box.border = BorderFactory.createEmptyBorder()
-            } else {
-                box.border = BorderFactory.createEmptyBorder(20, 0, 0, 0)
+            val viewButtons = ButtonGroup()
+            val views = JPanel(java.awt.GridLayout(1, 2, UIScale.scale(2), 0)).apply {
+                isOpaque = true
+                background = HostViewStyle.background
+                border = BorderFactory.createEmptyBorder(UIScale.scale(2), UIScale.scale(2), UIScale.scale(2), UIScale.scale(2))
+                preferredSize = UIScale.scale(Dimension(166, 32))
+                minimumSize = preferredSize
+                maximumSize = preferredSize
+                alignmentY = Component.CENTER_ALIGNMENT
             }
-            perform()
+            for ((mode, key) in listOf("cards" to "termora.welcome.view.cards", "tree" to "termora.welcome.view.list")) {
+                val button = JToggleButton(I18n.getString(key)).apply {
+                    isSelected = viewMode == mode
+                    font = font.deriveFont(UIScale.scale(12f))
+                    margin = UIScale.scale(Insets(0, 8, 0, 8))
+                    putClientProperty(FlatClientProperties.STYLE, mapOf(
+                        "arc" to 7,
+                        "background" to HostViewStyle.background,
+                        "foreground" to HostViewStyle.secondary,
+                        "hoverBackground" to HostViewStyle.hover,
+                        "pressedBackground" to HostViewStyle.hover,
+                        "selectedBackground" to HostViewStyle.surface,
+                        "selectedForeground" to HostViewStyle.foreground,
+                        "borderWidth" to 0,
+                        "focusWidth" to 0,
+                    ))
+                    addActionListener {
+                        viewMode = mode
+                        centerCardLayout.show(centerPanel, mode)
+                        perform()
+                    }
+                }
+                viewButtons.add(button)
+                views.add(button)
+            }
+            toolbarActions.add(views)
+            toolbarActions.add(Box.createHorizontalStrut(UIScale.scale(8)))
         }
+        toolbarActions.add(newHost)
+        toolbarActions.add(Box.createHorizontalStrut(UIScale.scale(4)))
+        val more = FlatButton().apply {
+            icon = Icons.moreHorizontal
+            toolTipText = I18n.getString("termora.welcome.workspace-actions")
+            accessibleContext.accessibleName = toolTipText
+            preferredSize = UIScale.scale(Dimension(30, 32))
+            minimumSize = preferredSize
+            maximumSize = preferredSize
+            alignmentY = Component.CENTER_ALIGNMENT
+            putClientProperty(FlatClientProperties.STYLE, mapOf(
+                "arc" to 8,
+                "background" to HostViewStyle.surface,
+                "hoverBackground" to HostViewStyle.hover,
+                "pressedBackground" to HostViewStyle.hover,
+                "borderWidth" to 0,
+                "focusWidth" to 0,
+            ))
+            addActionListener { showWorkspaceMenu(this) }
+        }
+        toolbarActions.add(more)
+        toolbar.isOpaque = true
+        toolbar.background = HostViewStyle.surface
+        toolbar.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(HostViewStyle.border, UIScale.scale(1), true),
+            BorderFactory.createEmptyBorder(UIScale.scale(5), UIScale.scale(6), UIScale.scale(5), UIScale.scale(6)),
+        )
+        toolbar.add(searchTextField, BorderLayout.CENTER)
+        toolbar.add(toolbarActions, BorderLayout.EAST)
+        return toolbar
+    }
 
-        return box
+    private fun showWorkspaceMenu(invoker: JComponent) {
+        val menu = JPopupMenu()
+        menu.add(JMenuItem(I18n.getString(
+            if (fullContent) "termora.welcome.center-content" else "termora.welcome.fill-window"
+        )).apply {
+            icon = if (fullContent) Icons.collapseAll else Icons.expandAll
+            addActionListener { fullContent = !fullContent; perform() }
+        })
+        menu.addSeparator()
+        menu.add(JMenuItem(I18n.getString("termora.welcome.workspace-actions")).apply {
+            icon = Icons.moreHorizontal
+            addActionListener { currentHostTree()?.showContextmenuForRoot(invoker, 0, invoker.height) }
+        })
+        menu.show(invoker, 0, invoker.height)
     }
 
     private fun createHostPanel(): JComponent {
-        val panel = JPanel(BorderLayout())
+        val panel = JPanel(BorderLayout()).apply { isOpaque = false }
         // Отключить звук при backspace в дереве без выделенного узла
         hostTree.actionMap.put("beep", object : AbstractAction() {
             override fun actionPerformed(e: ActionEvent) {}
@@ -204,14 +245,14 @@ class WelcomePanel(
         hostTree.showsRootHandles = true
 
         val scrollPane = JScrollPane(hostTree)
-        scrollPane.verticalScrollBar.maximumSize = Dimension(0, 0)
-        scrollPane.verticalScrollBar.preferredSize = Dimension(0, 0)
-        scrollPane.verticalScrollBar.minimumSize = Dimension(0, 0)
+        scrollPane.viewport.background = HostViewStyle.background
+        hostTree.background = HostViewStyle.background
+        hostTree.foreground = HostViewStyle.foreground
         scrollPane.border = BorderFactory.createEmptyBorder()
 
 
         panel.add(scrollPane, BorderLayout.CENTER)
-        panel.border = BorderFactory.createEmptyBorder(10, 0, 0, 0)
+        panel.border = BorderFactory.createEmptyBorder()
 
         hostTree.model = filterableTreeModel
         hostTree.name = "WelcomeHostTree"
@@ -234,6 +275,17 @@ class WelcomePanel(
         Disposer.register(this, hostCardsPanel)
         Disposer.register(hostTree, filterableTreeModel)
 
+        getInputMap(WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(
+            KeyStroke.getKeyStroke(KeyEvent.VK_F, Toolkit.getDefaultToolkit().menuShortcutKeyMaskEx),
+            "focus-search",
+        )
+        actionMap.put("focus-search", object : AbstractAction() {
+            override fun actionPerformed(e: ActionEvent) {
+                searchTextField.requestFocusInWindow()
+                searchTextField.selectAll()
+            }
+        })
+
         // 搜索框同时过滤卡片视图
         searchTextField.document.addDocumentListener(object : DocumentAdaptor() {
             override fun changedUpdate(e: DocumentEvent) {
@@ -242,10 +294,11 @@ class WelcomePanel(
         })
 
         addComponentListener(object : ComponentAdapter() {
+            override fun componentResized(e: ComponentEvent) {
+                perform()
+            }
+
             override fun componentShown(e: ComponentEvent) {
-                if (!searchTextField.hasFocus()) {
-                    searchTextField.requestFocusInWindow()
-                }
                 perform()
                 removeComponentListener(this)
             }
@@ -282,6 +335,14 @@ class WelcomePanel(
 
             override fun keyPressed(e: KeyEvent) {
                 if (e.keyCode == KeyEvent.VK_DOWN || e.keyCode == KeyEvent.VK_ENTER || e.keyCode == KeyEvent.VK_UP) {
+                    if (viewMode == "cards") {
+                        when (e.keyCode) {
+                            KeyEvent.VK_ENTER -> hostCardsPanel.openFirstHost(e)
+                            else -> hostCardsPanel.focusHost(last = e.keyCode == KeyEvent.VK_UP)
+                        }
+                        e.consume()
+                        return
+                    }
                     when (e.keyCode) {
                         KeyEvent.VK_UP -> hostTree.actionMap.get("selectPrevious")?.actionPerformed(event)
                         KeyEvent.VK_DOWN -> hostTree.actionMap.get("selectNext")?.actionPerformed(event)
@@ -299,23 +360,20 @@ class WelcomePanel(
     }
 
     private fun perform() {
-        rootPanel.remove(bannerPanel)
-        if (fullContent) {
-            rootPanel.border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
-        } else {
-            val top = max((height * 0.08).toInt(), 30)
-            // 卡片视图占用更宽的横向空间，让每行能容纳更多卡片
-            val left = if (viewMode == "cards") max((width * 0.04).toInt(), 24)
-            else max((width * 0.25).toInt(), 30)
-            rootPanel.add(bannerPanel, BorderLayout.NORTH)
-            rootPanel.border = BorderFactory.createEmptyBorder(top, left, top / 2, left)
-            SwingUtilities.invokeLater {
-                rootPanel.revalidate()
-                rootPanel.repaint()
+        val side = if (fullContent) UIScale.scale(20)
+        else max(UIScale.scale(24), (width - UIScale.scale(1360)) / 2)
+        rootPanel.border = BorderFactory.createEmptyBorder(UIScale.scale(24), side, UIScale.scale(24), side)
+        if (width > 0) {
+            val stack = width - side * 2 < UIScale.scale(700)
+            if (stack != stackedToolbar) {
+                stackedToolbar = stack
+                toolbar.remove(toolbarActions)
+                toolbar.add(toolbarActions, if (stack) BorderLayout.SOUTH else BorderLayout.EAST)
             }
         }
+        rootPanel.revalidate()
+        rootPanel.repaint()
     }
-
 
     override fun getTitle(): String {
         return StringUtils.EMPTY
